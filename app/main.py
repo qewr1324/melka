@@ -15,15 +15,12 @@ from app.config import (
     UPLOAD_DIR, RENDER_DIR, DATA_DIR, STATIC_DIR,
     HOST, PORT, MAX_FILE_SIZE,
 )
-from app.detectors.line_detector import detect_lines
+from app.detectors.line_detector import detect_lines, detect_lines_two_pass
 from app.detectors.stair_detector import detect_stairs
 from app.filters.stair_filter import filter_stair_lines
 from app.render.renderer import render_plan
 
 
-# ═══════════════════════════════════════════════
-# اپ اصلی
-# ═══════════════════════════════════════════════
 app = FastAPI(title="Melka Editor")
 
 app.add_middleware(
@@ -39,6 +36,7 @@ app.add_middleware(
 # ═══════════════════════════════════════════════
 class DetectRequest(BaseModel):
     filename: str
+    twoPass: bool = True
 
 
 class ReRenderRequest(BaseModel):
@@ -117,7 +115,7 @@ async def upload_floor_plan(floorPlan: UploadFile = File(...)):
     ext = os.path.splitext(floorPlan.filename)[1].lower()
     allowed_ext = [".jpg", ".jpeg", ".png", ".webp"]
     if ext not in allowed_ext:
-        raise HTTPException(400, "فقط تصویر مجاز است (jpg, png, webp)")
+        raise HTTPException(400, "فقط تصویر مجاز است")
 
     timestamp = int(time.time() * 1000)
     unique_name = f"{timestamp}-{os.urandom(4).hex()}{ext}"
@@ -151,18 +149,18 @@ async def upload_floor_plan(floorPlan: UploadFile = File(...)):
 
 
 # ═══════════════════════════════════════════════
-# API: تشخیص خطوط + پله
+# API: تشخیص خطوط (دو-مرحله‌ای)
 # ═══════════════════════════════════════════════
 @app.post("/api/detect-lines")
 async def detect_lines_api(request: Request):
     try:
         body = await request.json()
         fn = body.get("filename")
+        use_two_pass = body.get("twoPass", True)
 
         if not fn:
             raise HTTPException(400, "عکسی ارسال نشد")
 
-        # جلوگیری از path traversal
         safe_name = Path(fn).name
         if not safe_name or safe_name != fn:
             raise HTTPException(400, "نام فایل نامعتبر")
@@ -172,12 +170,23 @@ async def detect_lines_api(request: Request):
             raise HTTPException(404, "عکس پیدا نشد")
 
         start = time.time()
-        lines, img_w, img_h = detect_lines(str(image_path))
+
+        if use_two_pass:
+            print("🔵🔵 حالت دو-مرحله‌ای فعال")
+            lines, img_w, img_h = detect_lines_two_pass(
+                str(image_path),
+                UPLOAD_DIR,
+                RENDER_DIR,
+            )
+        else:
+            print("🔵 حالت یک-مرحله‌ای")
+            lines, img_w, img_h = detect_lines(str(image_path))
+
         stairs = detect_stairs(lines)
         wall_lines = filter_stair_lines(lines, stairs, tol=6)
         elapsed = int((time.time() - start) * 1000)
 
-        print(f"✅ تشخیص: {len(lines)} خط کل، {len(stairs)} پله، "
+        print(f"✅ تشخیص نهایی: {len(lines)} خط، {len(stairs)} پله، "
               f"{len(wall_lines)} خط دیوار، {elapsed}ms")
 
         return {
@@ -188,6 +197,7 @@ async def detect_lines_api(request: Request):
             "imageHeight": img_h,
             "lines": wall_lines,
             "stairs": stairs,
+            "twoPass": use_two_pass,
         }
 
     except HTTPException:

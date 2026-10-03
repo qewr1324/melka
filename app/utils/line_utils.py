@@ -9,7 +9,7 @@ def merge_collinear(lines, dist=10, gap=30):
 
     merged = []
     horizontal = [i for i, l in enumerate(lines) if l.get("orientation") == "h"]
-    vertical = [i for i, l in enumerate(lines) if l.get("orientation") != "h"]
+    vertical = [i for i, l in enumerate(lines) if l.get("orientation") == "v"]
 
     def merge_group(indices, is_h):
         group = [lines[i] for i in indices]
@@ -194,5 +194,105 @@ def extend_to_corners(lines, tolerance=30):
         v["length"] = abs(v["y2"] - v["y1"])
         if v["length"] >= 30:
             result.append(v)
+
+    return result
+
+
+def find_main_bounds(lines, percentile=0.03):
+    if len(lines) < 5:
+        return None
+
+    xs = []
+    ys = []
+    for l in lines:
+        xs.extend([l["x1"], l["x2"]])
+        ys.extend([l["y1"], l["y2"]])
+
+    xs = sorted(xs)
+    ys = sorted(ys)
+
+    n = len(xs)
+    lo = int(n * percentile)
+    hi = int(n * (1 - percentile))
+
+    return {
+        "minX": xs[lo],
+        "maxX": xs[hi - 1],
+        "minY": ys[lo],
+        "maxY": ys[hi - 1],
+    }
+
+
+def filter_by_bounds(lines, bounds, hard_margin=30):
+    if not bounds:
+        return lines
+
+    minX = bounds["minX"] - hard_margin
+    maxX = bounds["maxX"] + hard_margin
+    minY = bounds["minY"] - hard_margin
+    maxY = bounds["maxY"] + hard_margin
+
+    result = []
+    for l in lines:
+        if l.get("orientation") == "h":
+            if l["y1"] < minY or l["y1"] > maxY:
+                continue
+            if l["x1"] < minX and l["x2"] < minX:
+                continue
+            if l["x1"] > maxX and l["x2"] > maxX:
+                continue
+        else:
+            if l["x1"] < minX or l["x1"] > maxX:
+                continue
+            if l["y1"] < minY and l["y2"] < minY:
+                continue
+            if l["y1"] > maxY and l["y2"] > maxY:
+                continue
+
+        result.append(l)
+
+    return result
+
+
+def remove_isolated_short(lines, tolerance=25, short_threshold=150):
+    if not lines:
+        return lines
+
+    h_lines = [l for l in lines if l.get("orientation") == "h"]
+    v_lines = [l for l in lines if l.get("orientation") == "v"]
+
+    def is_connected(px, py, targets, is_h_source):
+        for t in targets:
+            if is_h_source:
+                if abs(t["x1"] - px) > tolerance:
+                    continue
+                oy1 = min(t["y1"], t["y2"])
+                oy2 = max(t["y1"], t["y2"])
+                if oy1 - tolerance <= py <= oy2 + tolerance:
+                    return True
+            else:
+                if abs(t["y1"] - py) > tolerance:
+                    continue
+                ox1 = min(t["x1"], t["x2"])
+                ox2 = max(t["x1"], t["x2"])
+                if ox1 - tolerance <= px <= ox2 + tolerance:
+                    return True
+        return False
+
+    result = []
+    for l in lines:
+        if l["length"] >= short_threshold:
+            result.append(l)
+            continue
+
+        if l.get("orientation") == "h":
+            c1 = is_connected(l["x1"], l["y1"], v_lines, True)
+            c2 = is_connected(l["x2"], l["y2"], v_lines, True)
+        else:
+            c1 = is_connected(l["x1"], l["y1"], h_lines, False)
+            c2 = is_connected(l["x1"], l["y2"], h_lines, False)
+
+        if c1 or c2:
+            result.append(l)
 
     return result

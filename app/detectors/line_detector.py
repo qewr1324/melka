@@ -10,11 +10,14 @@ from app.config import (
     MIN_LINE_LENGTH,
 )
 from app.utils.line_utils import (
-    merge_collinear, remove_duplicates, snap_endpoints, extend_to_corners,
+    merge_collinear, remove_duplicates,
+    snap_endpoints, extend_to_corners,
+    find_main_bounds, filter_by_bounds, remove_isolated_short,
 )
 
 
 def detect_lines(image_path: str):
+    """تشخیص خطوط از عکس پلان (یک پاس)"""
     if not os.path.exists(image_path):
         raise FileNotFoundError(f"عکس پیدا نشد: {image_path}")
 
@@ -90,14 +93,71 @@ def detect_lines(image_path: str):
     if not result:
         return [], MAX_IMAGE_WIDTH, target_h
 
+    # ─── پردازش ───
     result = merge_collinear(result, dist=10, gap=30)
     result = remove_duplicates(result, dist=10)
     result = [l for l in result if l["length"] >= 40]
     result = snap_endpoints(result, tolerance=25)
-    result = merge_collinear(result, dist=10, gap=30)
     result = extend_to_corners(result, tolerance=30)
     result = merge_collinear(result, dist=10, gap=30)
     result = remove_duplicates(result, dist=10)
 
+    # حذف پرت‌ها
+    bounds = find_main_bounds(result, percentile=0.03)
+    if bounds:
+        result = filter_by_bounds(result, bounds, hard_margin=30)
+    result = remove_isolated_short(result, tolerance=25, short_threshold=150)
+
+    result = [l for l in result if l["length"] >= 35]
+
     result.sort(key=lambda l: l["length"], reverse=True)
     return result, MAX_IMAGE_WIDTH, target_h
+
+
+# ═══════════════════════════════════════════════
+# ⭐ تشخیص دو-مرحله‌ای
+# ═══════════════════════════════════════════════
+def detect_lines_two_pass(image_path: str, upload_dir, render_dir):
+    """
+    تشخیص دو-مرحله‌ای:
+    1. تشخیص از عکس اصلی
+    2. رندر میانی تمیز
+    3. تشخیص مجدد از رندر میانی (خطوط تمیزتر)
+    """
+    import time
+    from app.render.renderer import render_clean_intermediate
+
+    # ═══ مرحله ۱ ═══
+    lines_1, w1, h1 = detect_lines(image_path)
+
+    if not lines_1:
+        return [], w1, h1
+
+    print(f"🔵 مرحله ۱: {len(lines_1)} خط از عکس اصلی")
+
+    # ═══ رندر میانی ═══
+    ts = int(time.time() * 1000)
+    intermediate_name = f"intermediate-{ts}.png"
+    intermediate_path = render_dir / intermediate_name
+
+    render_clean_intermediate(
+        lines=lines_1,
+        stairs=[],
+        image_width=w1,
+        image_height=h1,
+        output_path=str(intermediate_path),
+    )
+    print(f"🎨 رندر میانی: {intermediate_path}")
+
+    # ═══ مرحله ۲ ═══
+    lines_2, w2, h2 = detect_lines(str(intermediate_path))
+
+    print(f"🟢 مرحله ۲: {len(lines_2)} خط از رندر میانی")
+
+    # اگه مرحله ۲ معقول بود، ازش استفاده کن
+    if len(lines_2) >= len(lines_1) * 0.7:
+        print(f"✅ استفاده از نتیجه‌ی مرحله ۲")
+        return lines_2, w1, h1
+    else:
+        print(f"⚠️ مرحله ۲ خطوط کمی داد، برگشت به مرحله ۱")
+        return lines_1, w1, h1

@@ -122,17 +122,13 @@ def _draw_doors(draw, doors, sx, sy, style_cfg):
             continue
 
         angle = math.atan2(y2 - y1, x2 - x1)
-
-        # پاک کردن بخش دیوار
         draw.line((x1, y1, x2, y2), fill=style_cfg["bg"], width=8)
 
-        # خط در
         door_angle = angle - math.pi / 2
         dx = int(x1 + math.cos(door_angle) * length)
         dy = int(y1 + math.sin(door_angle) * length)
         draw.line((x1, y1, dx, dy), fill=color, width=2)
 
-        # قوس
         bbox = (x1 - length, y1 - length, x1 + length, y1 + length)
         start_deg = math.degrees(angle)
         end_deg = math.degrees(door_angle)
@@ -161,10 +157,8 @@ def _draw_windows(draw, windows, sx, sy, style_cfg):
         perp = angle + math.pi / 2
         offset = 4
 
-        # پاک کردن بخش دیوار
         draw.line((x1, y1, x2, y2), fill=style_cfg["bg"], width=8)
 
-        # دو خط موازی
         for sign in (-1, 1):
             ox = int(math.cos(perp) * offset * sign)
             oy = int(math.sin(perp) * offset * sign)
@@ -214,7 +208,6 @@ def _draw_texts(draw, texts, sx, sy):
         x = int(t["x"] * sx)
         y = int(t["y"] * sy)
 
-        # پس‌زمینه
         bg = t.get("bg")
         if bg and bg.lower() not in ("transparent", "none"):
             bb = draw.textbbox((0, 0), text, font=font)
@@ -323,10 +316,8 @@ def _draw_compass(draw, x, y, size, style_cfg, direction="north"):
                  outline=outline_color, width=2)
 
     angle_offset = {
-        "north": 0.0,
-        "south": math.pi,
-        "east": math.pi / 2,
-        "west": -math.pi / 2,
+        "north": 0.0, "south": math.pi,
+        "east": math.pi / 2, "west": -math.pi / 2,
     }.get(direction, 0.0)
 
     tip_x = cx + math.sin(angle_offset) * (r - 8)
@@ -340,7 +331,68 @@ def _draw_compass(draw, x, y, size, style_cfg, direction="north"):
 
 
 # ═══════════════════════════════════════════════
-# تابع اصلی
+# ⭐ تابع جدید: رندر میانی تمیز برای مرحله‌ی دوم تشخیص
+# ═══════════════════════════════════════════════
+def render_clean_intermediate(
+    lines: list,
+    stairs: list = None,
+    image_width: int = 1000,
+    image_height: int = 700,
+    output_path: str = None,
+):
+    """
+    رندر ساده و تمیز فقط برای مرحله‌ی دوم تشخیص.
+    - پس‌زمینه‌ی سفید خالص
+    - خطوط سیاه ضخیم (width=4)
+    - گره‌های گوشه با دایره‌های کوچیک
+    - فقط دیوار + پله (بدون اتاق، متن، فلش، قطب‌نما)
+    """
+    if stairs is None:
+        stairs = []
+
+    img = Image.new("RGB", (image_width, image_height), "#FFFFFF")
+    draw = ImageDraw.Draw(img)
+
+    # خطوط دیوار ضخیم و یکدست
+    for line in lines:
+        x1 = int(line["x1"])
+        y1 = int(line["y1"])
+        x2 = int(line["x2"])
+        y2 = int(line["y2"])
+        draw.line((x1, y1, x2, y2), fill="#000000", width=4)
+
+    # گره‌های گوشه (برای بسته شدن گوشه‌ها)
+    radius = 3
+    for line in lines:
+        for (px, py) in [(line["x1"], line["y1"]), (line["x2"], line["y2"])]:
+            cx = int(px)
+            cy = int(py)
+            draw.ellipse(
+                (cx - radius, cy - radius, cx + radius, cy + radius),
+                fill="#000000",
+            )
+
+    # پله‌ها
+    for s in stairs:
+        x1 = int(s["x"])
+        y1 = int(s["y"])
+        x2 = int(s["x"] + s["width"])
+        y2 = int(s["y"] + s["height"])
+        draw.rectangle((x1, y1, x2, y2), outline="#000000", width=3)
+        for l in s.get("lines", []):
+            draw.line(
+                (int(l["x1"]), int(l["y1"]), int(l["x2"]), int(l["y2"])),
+                fill="#000000", width=2,
+            )
+
+    if output_path:
+        img.save(output_path, "PNG", optimize=True)
+
+    return img
+
+
+# ═══════════════════════════════════════════════
+# تابع اصلی رندر
 # ═══════════════════════════════════════════════
 def render_plan(
     lines: list = None,
@@ -393,27 +445,21 @@ def render_plan(
     font_big = _load_font(20)
     font_small = _load_font(12)
 
-    # ۱. اتاق‌ها
     if layers.get("rooms", True) and rooms:
         _draw_rooms(draw, rooms, sx, sy, style_cfg, font_big, font_small)
 
-    # ۲. دیوارها
     if layers.get("walls", True):
         _draw_walls(draw, wall_lines, sx, sy, style_cfg, 4)
 
-    # ۳. پنجره‌ها
     if layers.get("windows", True):
         _draw_windows(draw, windows, sx, sy, style_cfg)
 
-    # ۴. درها
     if layers.get("doors", True):
         _draw_doors(draw, doors, sx, sy, style_cfg)
 
-    # ۵. پله‌ها
     if layers.get("stairs", True):
         _draw_stairs(draw, stairs, sx, sy, style_cfg, font_small)
 
-    # ۶. اشیاء گرافیکی (مستطیل، دایره، فلش، متن)
     if rects:
         _draw_rects(draw, rects, sx, sy)
     if circles:
@@ -423,7 +469,6 @@ def render_plan(
     if texts:
         _draw_texts(draw, texts, sx, sy)
 
-    # ۷. قطب‌نما
     if layers.get("compass", True) and compass:
         _draw_compass(
             draw,
@@ -434,7 +479,6 @@ def render_plan(
             direction=compass.get("direction", "north"),
         )
 
-    # ۸. عنوان
     if title:
         title_font = _load_font(26)
         draw.text((30, 20), title, fill=style_cfg["text"], font=title_font)
