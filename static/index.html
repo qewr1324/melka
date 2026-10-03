@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>نقشه‌ساز خانه</title>
+    <link rel="stylesheet" href="/static/style.css" />
+</head>
+
+<body>
+    <header>
+        <h1>🏠 نقشه‌ساز خانه</h1>
+        <p>پلان خانه‌ات رو آپلود کن یا خودت بکش</p>
+    </header>
+
+    <main>
+        <section class="card">
+            <h2>۱. آپلود عکس پلان</h2>
+            <input type="file" id="fileInput" accept="image/*" />
+            <div class="toolbar">
+                <button id="uploadBtn">📤 آپلود</button>
+                <button id="detectBtn" disabled>🤖 تشخیص خطوط با AI</button>
+                <a href="/three.html" id="threeDBtn" style="display:none;text-decoration:none;">
+                    <button type="button" style="background:#8e44ad;">🎮 نمایش سه‌بعدی</button>
+                </a>
+            </div>
+            <div id="uploadStatus"></div>
+            <div id="preview"></div>
+        </section>
+
+        <section class="card" id="renderedPlan" style="display:none;"></section>
+
+        <section class="card">
+            <h2>۲. کشیدن نقشه</h2>
+            <div class="toolbar">
+                <button id="drawWall" class="active">🧱 دیوار</button>
+                <button id="drawRoom">📐 اتاق</button>
+                <button id="drawDoor">🚪 در</button>
+                <button id="drawWindow">🪟 پنجره</button>
+                <button id="labelRoom">🏷️ نام‌گذاری اتاق</button>
+                <button id="clearCanvas">🗑️ پاک کردن</button>
+
+                <!-- ⭐ دکمه‌های زوم -->
+                <div class="zoom-controls">
+                    <button id="zoomIn" title="زوم +">🔍+</button>
+                    <button id="zoomOut" title="زوم -">🔍−</button>
+                    <button id="zoomFit" title="فیت کردن">🎯</button>
+                    <button id="zoomReset" title="ریست">↺</button>
+                </div>
+            </div>
+
+            <div class="canvas-hint">
+                🖱️ چرخ ماوس = زوم &nbsp;|&nbsp; 🖱️ راست‌کلیک یا Shift+درگ = پن
+                &nbsp;|&nbsp; ⌨️ + و − و 0 و F = زوم &nbsp;|&nbsp; 📱 دو انگشت = زوم
+            </div>
+
+            <div class="canvas-wrapper">
+                <canvas id="canvas" width="800" height="500"></canvas>
+            </div>
+
+            <div class="actions">
+                <button id="savePlan">💾 ذخیره نقشه</button>
+                <button id="reRender">🎨 رندر مجدد</button>
+                <span id="roomCount">تعداد اتاق: 0</span>
+            </div>
+        </section>
+
+        <section class="card" id="settingsPanel" style="display:none;">
+            <h2>۳. تنظیمات نقشه</h2>
+
+            <div class="settings-grid">
+                <label>
+                    🎨 استایل:
+                    <select id="styleSelect">
+                        <option value="modern">مدرن (رنگ‌بندی)</option>
+                        <option value="blueprint">نقشه‌ی کلاسیک (آبی)</option>
+                        <option value="minimal">مینیمال (سیاه و سفید)</option>
+                    </select>
+                </label>
+
+                <label>
+                    🧭 جهت شمال:
+                    <select id="compassDirection">
+                        <option value="north">شمال (N)</option>
+                        <option value="south">جنوب (S)</option>
+                        <option value="east">شرق (E)</option>
+                        <option value="west">غرب (W)</option>
+                    </select>
+                </label>
+
+                <label>
+                    📝 عنوان نقشه:
+                    <input type="text" id="planTitle" placeholder="مثلاً: آپارتمان ۱۲۰ متری">
+                </label>
+            </div>
+
+            <h3 style="margin-top:16px;">لایه‌ها</h3>
+            <div class="layers-grid">
+                <label><input type="checkbox" id="layerWalls" checked> 🧱 دیوارها</label>
+                <label><input type="checkbox" id="layerRooms" checked> 🎨 اتاق‌ها</label>
+                <label><input type="checkbox" id="layerLabels" checked> 🏷️ نام اتاق‌ها</label>
+                <label><input type="checkbox" id="layerStairs" checked> 🪜 پله‌ها</label>
+                <label><input type="checkbox" id="layerDoors" checked> 🚪 درها</label>
+                <label><input type="checkbox" id="layerWindows" checked> 🪟 پنجره‌ها</label>
+                <label><input type="checkbox" id="layerCompass" checked> 🧭 قطب‌نما</label>
+                <label><input type="checkbox" id="layerGrid"> ▦ گرید</label>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>۴. نقشه‌های ذخیره‌شده</h2>
+            <div id="plansList">هنوز نقشه‌ای ذخیره نشده</div>
+        </section>
+    </main>
+
+    <script src="/static/script.js"></script>
+</body>
+
+</html>

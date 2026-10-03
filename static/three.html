@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>نقشه سه‌بعدی</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: Tahoma, sans-serif;
+            overflow: hidden;
+            background: #1a1a2e;
+        }
+
+        #container {
+            width: 100vw;
+            height: 100vh;
+            position: relative;
+        }
+
+        #canvas3d {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        .ui {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 12px;
+            padding: 16px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+            min-width: 240px;
+            z-index: 10;
+        }
+
+        .ui h2 {
+            font-size: 1rem;
+            margin-bottom: 12px;
+            color: #2c3e50;
+        }
+
+        .ui button {
+            display: block;
+            width: 100%;
+            background: #3498db;
+            color: #fff;
+            border: none;
+            padding: 10px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            margin-bottom: 8px;
+            font-family: inherit;
+            transition: background 0.2s;
+        }
+
+        .ui button:hover {
+            background: #2980b9;
+        }
+
+        .ui button.active {
+            background: #27ae60;
+        }
+
+        .ui a {
+            display: block;
+            text-align: center;
+            background: #27ae60;
+            color: #fff;
+            text-decoration: none;
+            padding: 10px 16px;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            margin-top: 8px;
+        }
+
+        .ui label {
+            display: block;
+            font-size: 0.85rem;
+            color: #2c3e50;
+            margin-bottom: 12px;
+            font-weight: 500;
+        }
+
+        .ui label input {
+            width: 80px;
+            padding: 6px 8px;
+            border: 1.5px solid #dfe6e9;
+            border-radius: 6px;
+            margin-right: 6px;
+            font-family: inherit;
+            font-size: 0.9rem;
+            text-align: center;
+        }
+
+        .ui label input:focus {
+            outline: none;
+            border-color: #3498db;
+        }
+
+        .info {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(255, 255, 255, 0.9);
+            border-radius: 8px;
+            padding: 10px 14px;
+            font-size: 0.8rem;
+            color: #7f8c8d;
+            z-index: 10;
+        }
+
+        .stats {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(255, 255, 255, 0.9);
+            border-radius: 8px;
+            padding: 10px 14px;
+            font-size: 0.8rem;
+            color: #2c3e50;
+            z-index: 10;
+            min-width: 160px;
+        }
+
+        .stats div {
+            margin-bottom: 4px;
+        }
+
+        .stats strong {
+            color: #e67e22;
+        }
+
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 20px 30px;
+            border-radius: 12px;
+            z-index: 100;
+            font-size: 1rem;
+            text-align: center;
+            line-height: 1.8;
+        }
+
+        #errorBox {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: #e74c3c;
+            color: white;
+            padding: 16px 20px;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            max-width: 500px;
+            z-index: 200;
+            display: none;
+            font-family: monospace;
+            white-space: pre-wrap;
+            direction: ltr;
+            text-align: left;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="container">
+        <canvas id="canvas3d"></canvas>
+        <div id="loading">⏳ در حال بارگذاری صحنه...</div>
+        <div id="errorBox"></div>
+
+        <div class="ui">
+            <h2>🎛️ کنترل نمایش</h2>
+
+            <label>
+                🏢 ارتفاع طبقه (cm):
+                <input type="number" id="floorHeight" value="300" min="200" max="400" step="10">
+            </label>
+
+            <button id="toggleWalls" class="active">🧱 نمایش دیوارها</button>
+            <button id="toggleFloors" class="active">🎨 نمایش کف اتاق‌ها</button>
+            <button id="toggleStairs" class="active">🪜 نمایش پله‌ها</button>
+            <button id="toggleRoof">🏠 نمایش سقف</button>
+            <button id="resetView">🔄 بازنشانی دوربین</button>
+            <a href="/">↩️ بازگشت به نقشه دوبعدی</a>
+        </div>
+
+        <div class="info">
+            🖱️ چرخوندن با ماوس | 🖱️ زوم با اسکرول | 🖱️ جابجایی با راست‌کلیک
+        </div>
+
+        <div class="stats" id="stats">
+            <div>📐 خطوط: <strong id="statLines">0</strong></div>
+            <div>🏠 اتاق‌ها: <strong id="statRooms">0</strong></div>
+            <div>🪜 پله‌ها: <strong id="statStairs">0</strong></div>
+        </div>
+    </div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "/three/three.module.js",
+            "three/addons/": "/three/"
+        }
+    }
+    </script>
+
+    <script>
+        window.addEventListener('error', (e) => {
+            const box = document.getElementById('errorBox');
+            if (box) {
+                box.style.display = 'block';
+                box.textContent = '❌ خطا: ' + (e.message || 'ناشناخته') +
+                    (e.filename ? '\n\nفایل: ' + e.filename + ':' + e.lineno : '');
+            }
+        });
+        window.addEventListener('unhandledrejection', (e) => {
+            const box = document.getElementById('errorBox');
+            if (box) {
+                box.style.display = 'block';
+                box.textContent = '❌ Promise Error: ' + (e.reason?.message || e.reason);
+            }
+        });
+    </script>
+
+    <script type="module" src="/static/three-scene.js"></script>
+</body>
+
+</html>
