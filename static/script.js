@@ -1,886 +1,491 @@
 // ═══════════════════════════════════════════════
-// المان‌های اصلی
-// ═══════════════════════════════════════════════
-const fileInput = document.getElementById("fileInput");
-const uploadBtn = document.getElementById("uploadBtn");
-const detectBtn = document.getElementById("detectBtn");
-const uploadStatus = document.getElementById("uploadStatus");
-const preview = document.getElementById("preview");
-
-let uploadedFilename = null;
-
-// ⭐ ابعاد اصلی عکسی که AI روش کار کرده (برای رندر مجدد ثابت بمونه)
-let planImageWidth = 1000;
-let planImageHeight = 700;
-
-// ⭐ بازیابی از localStorage اگه قبلاً ذخیره شده
-try {
-	const stored = localStorage.getItem("melka-plan");
-	if (stored) {
-		const parsed = JSON.parse(stored);
-		if (parsed.imageWidth) planImageWidth = parsed.imageWidth;
-		if (parsed.imageHeight) planImageHeight = parsed.imageHeight;
-	}
-} catch (e) {
-	console.warn("خطا در خواندن localStorage:", e);
-}
-
-// ═══════════════════════════════════════════════
-// آپلود
-// ═══════════════════════════════════════════════
-uploadBtn.addEventListener("click", async () => {
-	const file = fileInput.files[0];
-	if (!file) return (uploadStatus.textContent = "❌ اول یه عکس انتخاب کن");
-
-	const formData = new FormData();
-	formData.append("floorPlan", file);
-	uploadStatus.textContent = "⏳ در حال آپلود...";
-
-	try {
-		const res = await fetch("/api/upload", { method: "POST", body: formData });
-		const data = await res.json();
-		if (data.success) {
-			uploadStatus.textContent = "✅ آپلود شد";
-			uploadedFilename = data.filename;
-			detectBtn.disabled = false;
-			preview.innerHTML = `<img src="${data.url}" alt="پلان" />`;
-		} else {
-			uploadStatus.textContent = "❌ " + (data.detail || data.error);
-		}
-	} catch (err) {
-		uploadStatus.textContent = "❌ خطای شبکه: " + err.message;
-	}
-});
-
-// ═══════════════════════════════════════════════
-// تشخیص AI
-// ═══════════════════════════════════════════════
-detectBtn.addEventListener("click", async () => {
-	if (!uploadedFilename) return;
-	detectBtn.disabled = true;
-	uploadStatus.textContent = "🤖 در حال تشخیص خطوط و پله‌ها...";
-
-	try {
-		const res = await fetch("/api/detect-lines", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ filename: uploadedFilename }),
-		});
-		const data = await res.json();
-
-		if (data.success) {
-			const stairCount = data.stairs ? data.stairs.length : 0;
-			uploadStatus.textContent = `✅ ${data.lines.length} خط و ${stairCount} پله تشخیص داده شد (${data.elapsed} میلی‌ثانیه)`;
-			console.log("نتیجه AI:", data);
-
-			walls = data.lines.map((l) => ({
-				x1: l.x1,
-				y1: l.y1,
-				x2: l.x2,
-				y2: l.y2,
-			}));
-			detectedStairs = data.stairs || [];
-
-			// ⭐ ذخیره‌ی ابعاد اصلی عکس (برای رندر مجدد)
-			planImageWidth = data.imageWidth || 1000;
-			planImageHeight = data.imageHeight || 700;
-
-			// ⭐ نقشه رو به اندازه‌ی canvas فیت کن
-			fitToScreen();
-
-			localStorage.setItem(
-				"melka-plan",
-				JSON.stringify({
-					lines: data.lines,
-					imageWidth: planImageWidth,
-					imageHeight: planImageHeight,
-					stairs: data.stairs || [],
-				}),
-			);
-
-			document.getElementById("threeDBtn").style.display = "inline-block";
-			showSettingsPanel();
-
-			if (data.renderedUrl) {
-				const renderedDiv = document.getElementById("renderedPlan");
-				renderedDiv.innerHTML = `
-                    <h2>🎨 نقشه نهایی</h2>
-                    <img src="${data.renderedUrl}" alt="نقشه نهایی" style="max-width:100%;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.1);" />
-                    <div style="margin-top:12px;">
-                        <a href="${data.renderedUrl}" download="plan.png" style="display:inline-block;padding:10px 18px;background:#27ae60;color:#fff;text-decoration:none;border-radius:8px;font-weight:500;">
-                            💾 دانلود نقشه
-                        </a>
-                    </div>
-                `;
-				renderedDiv.style.display = "block";
-			}
-		} else {
-			uploadStatus.textContent = "❌ " + (data.detail || data.error);
-		}
-	} catch (err) {
-		uploadStatus.textContent = "❌ خطای شبکه: " + err.message;
-	} finally {
-		detectBtn.disabled = false;
-	}
-});
-
-// ═══════════════════════════════════════════════
-// Canvas و Viewport (زوم و پن)
+// المان‌ها
 // ═══════════════════════════════════════════════
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
+const wrapper = document.getElementById("canvasWrapper");
+const toolbar = document.getElementById("toolbar");
+const properties = document.getElementById("properties");
+const textInput = document.getElementById("textInput");
+const toolHint = document.getElementById("toolHint");
+const zoomIndicator = document.getElementById("zoomIndicator");
+const selectionInfo = document.getElementById("selectionInfo");
+const deleteBtn = document.getElementById("deleteBtn");
+const undoBtn = document.getElementById("undoBtn");
+const redoBtn = document.getElementById("redoBtn");
 
-let view = {
-	scale: 1,
-	offsetX: 0,
-	offsetY: 0,
-};
-
-function screenToWorld(screenX, screenY) {
-	return {
-		x: (screenX - view.offsetX) / view.scale,
-		y: (screenY - view.offsetY) / view.scale,
-	};
-}
-
-function getPos(e) {
-	const rect = canvas.getBoundingClientRect();
-	const scaleX = canvas.width / rect.width;
-	const scaleY = canvas.height / rect.height;
-	const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-	const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-	const screenX = (clientX - rect.left) * scaleX;
-	const screenY = (clientY - rect.top) * scaleY;
-	return screenToWorld(screenX, screenY);
-}
-
-// ⭐ فیت کردن نقشه به صفحه (فقط نمایش، داده دست‌نخورده می‌مونه)
-function fitToScreen() {
-	let minX = Infinity,
-		minY = Infinity;
-	let maxX = -Infinity,
-		maxY = -Infinity;
-
-	const allPoints = [];
-	walls.forEach((w) => {
-		allPoints.push({ x: w.x1, y: w.y1 }, { x: w.x2, y: w.y2 });
-	});
-	doors.forEach((d) => {
-		allPoints.push({ x: d.x1, y: d.y1 }, { x: d.x2, y: d.y2 });
-	});
-	windows.forEach((w) => {
-		allPoints.push({ x: w.x1, y: w.y1 }, { x: w.x2, y: w.y2 });
-	});
-	rooms.forEach((r) => {
-		allPoints.push({ x: r.x, y: r.y }, { x: r.x + r.w, y: r.y + r.h });
-	});
-	detectedStairs.forEach((s) => {
-		allPoints.push({ x: s.x, y: s.y }, { x: s.x + s.width, y: s.y + s.height });
-	});
-
-	if (allPoints.length === 0) {
-		view.scale = 1;
-		view.offsetX = 0;
-		view.offsetY = 0;
-		redraw();
-		return;
-	}
-
-	allPoints.forEach((p) => {
-		minX = Math.min(minX, p.x);
-		minY = Math.min(minY, p.y);
-		maxX = Math.max(maxX, p.x);
-		maxY = Math.max(maxY, p.y);
-	});
-
-	const mapW = maxX - minX;
-	const mapH = maxY - minY;
-
-	if (mapW === 0 || mapH === 0) {
-		view.scale = 1;
-		view.offsetX = 0;
-		view.offsetY = 0;
-		redraw();
-		return;
-	}
-
-	const padding = 0.95;
-	const scaleX = (canvas.width * padding) / mapW;
-	const scaleY = (canvas.height * padding) / mapH;
-	const newScale = Math.min(scaleX, scaleY);
-
-	view.scale = newScale;
-	view.offsetX = (canvas.width - mapW * newScale) / 2 - minX * newScale;
-	view.offsetY = (canvas.height - mapH * newScale) / 2 - minY * newScale;
-
-	redraw();
-}
-
-function resetView() {
-	view.scale = 1;
-	view.offsetX = 0;
-	view.offsetY = 0;
-	redraw();
-}
-
-function zoomAt(screenX, screenY, delta) {
-	const oldScale = view.scale;
-	const zoomFactor = delta > 0 ? 1.1 : 1 / 1.1;
-	const newScale = Math.max(0.1, Math.min(20, oldScale * zoomFactor));
-
-	view.offsetX = screenX - (screenX - view.offsetX) * (newScale / oldScale);
-	view.offsetY = screenY - (screenY - view.offsetY) * (newScale / oldScale);
-	view.scale = newScale;
-
-	redraw();
-}
+const propColor = document.getElementById("propColor");
+const propWidth = document.getElementById("propWidth");
+const propFill = document.getElementById("propFill");
+const propFontSize = document.getElementById("propFontSize");
+const fontRow = document.getElementById("fontRow");
+const fillRow = document.getElementById("fillRow");
 
 // ═══════════════════════════════════════════════
-// حالت‌ها
+// State
 // ═══════════════════════════════════════════════
-const drawWallBtn = document.getElementById("drawWall");
-const drawRoomBtn = document.getElementById("drawRoom");
-const drawDoorBtn = document.getElementById("drawDoor");
-const drawWindowBtn = document.getElementById("drawWindow");
-const labelRoomBtn = document.getElementById("labelRoom");
-const clearBtn = document.getElementById("clearCanvas");
-const savePlanBtn = document.getElementById("savePlan");
-const roomCountEl = document.getElementById("roomCount");
-
-let mode = "wall";
-let walls = [];
-let rooms = [];
-let doors = [];
-let windows = [];
+let objects = []; // همه‌ی شیءها
+let selectedId = null; // شیء انتخاب‌شده
+let currentTool = "select"; // ابزار فعال
+let history = []; // برای Undo
+let redoStack = []; // برای Redo
 let isDrawing = false;
 let startPoint = null;
 let currentPoint = null;
-let detectedStairs = [];
-
+let draggingObject = null;
+let dragOffset = { x: 0, y: 0 };
 let isPanning = false;
-let panStart = { x: 0, y: 0, offsetX: 0, offsetY: 0 };
+let panStart = { x: 0, y: 0, ox: 0, oy: 0 };
+
+// viewport
+let view = { scale: 1, offsetX: 0, offsetY: 0 };
+
+// ابعاد اصلی عکس AI
+let planImageWidth = 1000;
+let planImageHeight = 700;
+
+// نقشه‌ی AI
+let detectedStairs = [];
+let baseWalls = []; // خطوط دیوار از AI (فقط برای فیت کردن)
 
 let mapSettings = {
 	style: "modern",
 	compass: { x: 700, y: 420, size: 40, direction: "north" },
 	title: "",
-	layers: {
-		walls: true,
-		rooms: true,
-		roomLabels: true,
-		stairs: true,
-		doors: true,
-		windows: true,
-		compass: true,
-		grid: false,
-	},
 };
 
-function setMode(newMode, activeBtn) {
-	mode = newMode;
-	[drawWallBtn, drawRoomBtn, drawDoorBtn, drawWindowBtn, labelRoomBtn].forEach((b) => b.classList.remove("active"));
-	if (activeBtn) activeBtn.classList.add("active");
+// رنگ‌های پیش‌فرض
+const DEFAULT_STYLE = {
+	wall: { color: "#2c3e50", width: 4 },
+	door: { color: "#8B4513", width: 3 },
+	window: { color: "#3498DB", width: 3 },
+	text: { color: "#2c3e50", fontSize: 20, bg: "#ffffff" },
+	arrow: { color: "#e74c3c", width: 3 },
+	rect: { color: "#3498db", width: 2, fill: "transparent" },
+	circle: { color: "#9b59b6", width: 2, fill: "transparent" },
+	room: { color: "#3498db", width: 2 },
+};
+
+// ═══════════════════════════════════════════════
+// Helper: تولید ID
+// ═══════════════════════════════════════════════
+function uid() {
+	return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 }
 
-drawWallBtn.onclick = () => setMode("wall", drawWallBtn);
-drawRoomBtn.onclick = () => setMode("room", drawRoomBtn);
-drawDoorBtn.onclick = () => setMode("door", drawDoorBtn);
-drawWindowBtn.onclick = () => setMode("window", drawWindowBtn);
-labelRoomBtn.onclick = () => setMode("label", labelRoomBtn);
+// ═══════════════════════════════════════════════
+// History (Undo/Redo)
+// ═══════════════════════════════════════════════
+function pushHistory() {
+	history.push(JSON.stringify(objects));
+	if (history.length > 50) history.shift();
+	redoStack = [];
+	updateUndoRedo();
+}
 
-clearBtn.onclick = () => {
-	if (!confirm("مطمئنی می‌خوای همه‌چیز رو پاک کنی؟")) return;
-	walls = [];
-	rooms = [];
-	doors = [];
-	windows = [];
-	detectedStairs = [];
-	updateRoomCount();
-	resetView();
+function updateUndoRedo() {
+	undoBtn.disabled = history.length <= 1;
+	redoBtn.disabled = redoStack.length === 0;
+}
+
+function undo() {
+	if (history.length <= 1) return;
+	const current = history.pop();
+	redoStack.push(current);
+	objects = JSON.parse(history[history.length - 1]);
+	selectedId = null;
+	updateSelectionUI();
+	redraw();
+	updateUndoRedo();
+}
+
+function redo() {
+	if (redoStack.length === 0) return;
+	const state = redoStack.pop();
+	history.push(state);
+	objects = JSON.parse(state);
+	selectedId = null;
+	updateSelectionUI();
+	redraw();
+	updateUndoRedo();
+}
+
+undoBtn.onclick = undo;
+redoBtn.onclick = redo;
+
+// تاریخچه‌ی اولیه
+history.push(JSON.stringify(objects));
+
+// ═══════════════════════════════════════════════
+// ابزارها
+// ═══════════════════════════════════════════════
+const toolHints = {
+	select: "👆 روی اشیاء بزن تا انتخاب بشن | بکش تا جابجا کنی",
+	wall: "🧱 بکش تا دیوار رسم کنی",
+	room: "📐 بکش تا اتاق رسم کنی",
+	door: "🚪 بکش تا در رسم کنی",
+	window: "🪟 بکش تا پنجره رسم کنی",
+	text: "🏷️ روی نقشه بزن، متن رو بنویس، Enter بزن",
+	arrow: "➡️ بکش تا فلش رسم کنی",
+	rect: "⬛ بکش تا مستطیل رسم کنی",
+	circle: "⭕ بکش تا دایره رسم کنی",
+	eraser: "🧽 روی هر شیء بزن تا پاک بشه",
 };
 
+document.querySelectorAll(".tool-btn").forEach((btn) => {
+	btn.addEventListener("click", () => {
+		const tool = btn.dataset.tool;
+
+		// اگه ابزار text بود و یه input باز بود، ببندش
+		if (textInput.style.display !== "none") {
+			commitTextInput();
+		}
+
+		document.querySelectorAll(".tool-btn").forEach((b) => b.classList.remove("active"));
+		btn.classList.add("active");
+		currentTool = tool;
+		toolHint.textContent = toolHints[tool] || "";
+		selectedId = null;
+		updateSelectionUI();
+		redraw();
+	});
+});
+
 // ═══════════════════════════════════════════════
-// رویدادهای ماوس
+// تبدیل مختصات
 // ═══════════════════════════════════════════════
-function startDraw(e) {
-	if (e.button === 1 || e.button === 2 || e.shiftKey) {
-		e.preventDefault();
-		isPanning = true;
-		const rect = canvas.getBoundingClientRect();
-		panStart.x = e.clientX - rect.left;
-		panStart.y = e.clientY - rect.top;
-		panStart.offsetX = view.offsetX;
-		panStart.offsetY = view.offsetY;
-		canvas.style.cursor = "grabbing";
-		return;
+function screenToWorld(clientX, clientY) {
+	const rect = wrapper.getBoundingClientRect();
+	const localX = clientX - rect.left;
+	const localY = clientY - rect.top;
+	return {
+		x: (localX - view.offsetX) / view.scale,
+		y: (localY - view.offsetY) / view.scale,
+	};
+}
+
+function worldToScreen(wx, wy) {
+	const rect = wrapper.getBoundingClientRect();
+	return {
+		x: wx * view.scale + view.offsetX,
+		y: wy * view.scale + view.offsetY,
+	};
+}
+
+// ═══════════════════════════════════════════════
+// فیت کردن نقشه (بعد از AI)
+// ═══════════════════════════════════════════════
+function fitToScreen() {
+	// مرزهای همه‌ی اشیاء
+	let minX = Infinity,
+		minY = Infinity,
+		maxX = -Infinity,
+		maxY = -Infinity;
+
+	function addPoint(x, y) {
+		minX = Math.min(minX, x);
+		minY = Math.min(minY, y);
+		maxX = Math.max(maxX, x);
+		maxY = Math.max(maxY, y);
 	}
 
-	e.preventDefault();
-	isDrawing = true;
-	startPoint = getPos(e);
-	currentPoint = startPoint;
-}
+	objects.forEach((o) => {
+		if (o.type === "wall" || o.type === "door" || o.type === "window" || o.type === "arrow") {
+			addPoint(o.x1, o.y1);
+			addPoint(o.x2, o.y2);
+		} else if (o.type === "rect" || o.type === "room") {
+			addPoint(o.x, o.y);
+			addPoint(o.x + o.w, o.y + o.h);
+		} else if (o.type === "circle") {
+			addPoint(o.x - o.r, o.y - o.r);
+			addPoint(o.x + o.r, o.y + o.r);
+		} else if (o.type === "text") {
+			addPoint(o.x, o.y);
+			addPoint(o.x + 100, o.y + 30);
+		}
+	});
 
-function moveDraw(e) {
-	if (isPanning) {
-		e.preventDefault();
-		const rect = canvas.getBoundingClientRect();
-		const dx = e.clientX - rect.left - panStart.x;
-		const dy = e.clientY - rect.top - panStart.y;
-		view.offsetX = panStart.offsetX + dx;
-		view.offsetY = panStart.offsetY + dy;
+	if (!isFinite(minX)) {
+		view = { scale: 1, offsetX: 0, offsetY: 0 };
 		redraw();
 		return;
 	}
 
-	if (!isDrawing) return;
-	e.preventDefault();
-	currentPoint = getPos(e);
-	redraw();
-	drawPreview();
-}
+	const mapW = maxX - minX;
+	const mapH = maxY - minY;
+	if (mapW === 0 || mapH === 0) return;
 
-function endDraw(e) {
-	if (isPanning) {
-		isPanning = false;
-		canvas.style.cursor = "crosshair";
-		return;
-	}
+	const cw = wrapper.clientWidth;
+	const ch = wrapper.clientHeight;
+	const padding = 0.9;
+	const sx = (cw * padding) / mapW;
+	const sy = (ch * padding) / mapH;
+	const newScale = Math.min(sx, sy);
 
-	if (!isDrawing) return;
-	e.preventDefault();
-	isDrawing = false;
-	const end = getPos(e);
-
-	if (mode === "wall") {
-		walls.push({ x1: startPoint.x, y1: startPoint.y, x2: end.x, y2: end.y });
-	} else if (mode === "room") {
-		rooms.push({
-			x: Math.min(startPoint.x, end.x),
-			y: Math.min(startPoint.y, end.y),
-			w: Math.abs(end.x - startPoint.x),
-			h: Math.abs(end.y - startPoint.y),
-			name: "",
-			type: "unknown",
-		});
-		updateRoomCount();
-	} else if (mode === "door") {
-		doors.push({
-			x1: startPoint.x,
-			y1: startPoint.y,
-			x2: end.x,
-			y2: end.y,
-		});
-	} else if (mode === "window") {
-		windows.push({
-			x1: startPoint.x,
-			y1: startPoint.y,
-			x2: end.x,
-			y2: end.y,
-		});
-	} else if (mode === "label") {
-		const idx = findRoomAtPoint(end);
-		if (idx >= 0) {
-			openLabelDialog(idx);
-		} else {
-			alert("❌ روی یه اتاق کلیک کن");
-		}
-	}
-
-	startPoint = null;
-	currentPoint = null;
+	view.scale = newScale;
+	view.offsetX = (cw - mapW * newScale) / 2 - minX * newScale;
+	view.offsetY = (ch - mapH * newScale) / 2 - minY * newScale;
 	redraw();
 }
 
-// ⭐ زوم با چرخ ماوس
-canvas.addEventListener(
-	"wheel",
-	(e) => {
-		e.preventDefault();
-		const rect = canvas.getBoundingClientRect();
-		const scaleX = canvas.width / rect.width;
-		const scaleY = canvas.height / rect.height;
-		const mx = (e.clientX - rect.left) * scaleX;
-		const my = (e.clientY - rect.top) * scaleY;
-
-		zoomAt(mx, my, e.deltaY);
-	},
-	{ passive: false },
-);
-
-canvas.addEventListener("contextmenu", (e) => e.preventDefault());
-
-// ⭐ دکمه‌های زوم
-const zoomInBtn = document.getElementById("zoomIn");
-const zoomOutBtn = document.getElementById("zoomOut");
-const zoomResetBtn = document.getElementById("zoomReset");
-const zoomFitBtn = document.getElementById("zoomFit");
-
-if (zoomInBtn) {
-	zoomInBtn.onclick = () => {
-		zoomAt(canvas.width / 2, canvas.height / 2, -1);
-	};
-}
-if (zoomOutBtn) {
-	zoomOutBtn.onclick = () => {
-		zoomAt(canvas.width / 2, canvas.height / 2, 1);
-	};
-}
-if (zoomResetBtn) {
-	zoomResetBtn.onclick = () => resetView();
-}
-if (zoomFitBtn) {
-	zoomFitBtn.onclick = () => fitToScreen();
+function resetView() {
+	view = { scale: 1, offsetX: 0, offsetY: 0 };
+	redraw();
 }
 
-// ⭐ کیبورد
-document.addEventListener("keydown", (e) => {
-	if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
-
-	if (e.key === "+" || e.key === "=") {
-		zoomAt(canvas.width / 2, canvas.height / 2, -1);
-	} else if (e.key === "-" || e.key === "_") {
-		zoomAt(canvas.width / 2, canvas.height / 2, 1);
-	} else if (e.key === "0") {
-		resetView();
-	} else if (e.key === "f" || e.key === "F") {
-		fitToScreen();
-	}
-});
-
-// ⭐ رویدادهای canvas
-canvas.addEventListener("mousedown", startDraw);
-canvas.addEventListener("mousemove", moveDraw);
-canvas.addEventListener("mouseup", endDraw);
-canvas.addEventListener("mouseleave", () => {
-	isDrawing = false;
-	isPanning = false;
-	canvas.style.cursor = "crosshair";
-});
-
-// ⭐ لمسی
-let touchState = {
-	active: false,
-	startDist: 0,
-	startScale: 1,
-	startMid: { x: 0, y: 0 },
-	startOffset: { x: 0, y: 0 },
-};
-
-canvas.addEventListener(
-	"touchstart",
-	(e) => {
-		if (e.touches.length === 2) {
-			e.preventDefault();
-			isDrawing = false;
-
-			const t1 = e.touches[0];
-			const t2 = e.touches[1];
-			const rect = canvas.getBoundingClientRect();
-			const scaleX = canvas.width / rect.width;
-			const scaleY = canvas.height / rect.height;
-
-			touchState.active = true;
-			touchState.startDist = Math.hypot((t2.clientX - t1.clientX) * scaleX, (t2.clientY - t1.clientY) * scaleY);
-			touchState.startScale = view.scale;
-			touchState.startMid = {
-				x: ((t1.clientX + t2.clientX) / 2 - rect.left) * scaleX,
-				y: ((t1.clientY + t2.clientY) / 2 - rect.top) * scaleY,
-			};
-			touchState.startOffset = { x: view.offsetX, y: view.offsetY };
-		} else {
-			startDraw(e);
-		}
-	},
-	{ passive: false },
-);
-
-canvas.addEventListener(
-	"touchmove",
-	(e) => {
-		if (e.touches.length === 2 && touchState.active) {
-			e.preventDefault();
-
-			const t1 = e.touches[0];
-			const t2 = e.touches[1];
-			const rect = canvas.getBoundingClientRect();
-			const scaleX = canvas.width / rect.width;
-			const scaleY = canvas.height / rect.height;
-
-			const newDist = Math.hypot((t2.clientX - t1.clientX) * scaleX, (t2.clientY - t1.clientY) * scaleY);
-			const newScale = touchState.startScale * (newDist / touchState.startDist);
-
-			const mid = {
-				x: ((t1.clientX + t2.clientX) / 2 - rect.left) * scaleX,
-				y: ((t1.clientY + t2.clientY) / 2 - rect.top) * scaleY,
-			};
-
-			view.offsetX = mid.x - (touchState.startMid.x - touchState.startOffset.x) * (newScale / touchState.startScale);
-			view.offsetY = mid.y - (touchState.startMid.y - touchState.startOffset.y) * (newScale / touchState.startScale);
-			view.scale = Math.max(0.1, Math.min(20, newScale));
-
-			redraw();
-		} else {
-			moveDraw(e);
-		}
-	},
-	{ passive: false },
-);
-
-canvas.addEventListener(
-	"touchend",
-	(e) => {
-		if (touchState.active && e.touches.length < 2) {
-			touchState.active = false;
-			return;
-		}
-		endDraw(e);
-	},
-	{ passive: false },
-);
+function zoomAt(screenX, screenY, factor) {
+	const oldScale = view.scale;
+	const newScale = Math.max(0.1, Math.min(20, oldScale * factor));
+	view.offsetX = screenX - (screenX - view.offsetX) * (newScale / oldScale);
+	view.offsetY = screenY - (screenY - view.offsetY) * (newScale / oldScale);
+	view.scale = newScale;
+	redraw();
+}
 
 // ═══════════════════════════════════════════════
-// توابع کمکی
+// Resize canvas
 // ═══════════════════════════════════════════════
-function findRoomAtPoint(pt) {
-	for (let i = 0; i < rooms.length; i++) {
-		const r = rooms[i];
-		if (pt.x >= r.x && pt.x <= r.x + r.w && pt.y >= r.y && pt.y <= r.y + r.h) {
-			return i;
-		}
-	}
-	return -1;
-}
-
-function openLabelDialog(roomIdx) {
-	const room = rooms[roomIdx];
-	const name = prompt("اسم این اتاق چیه؟\n(آشپزخانه، اتاق خواب، پذیرایی، سرویس، ...)", room.name || "");
-	if (name === null) return;
-	rooms[roomIdx].name = name;
-	rooms[roomIdx].type = detectRoomType(name);
+function resizeCanvas() {
+	const dpr = Math.min(window.devicePixelRatio || 1, 2);
+	const w = wrapper.clientWidth;
+	const h = wrapper.clientHeight;
+	canvas.width = w * dpr;
+	canvas.height = h * dpr;
+	canvas.style.width = w + "px";
+	canvas.style.height = h + "px";
+	ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 	redraw();
 }
 
-function detectRoomType(name) {
-	if (!name) return "unknown";
-	const n = name.trim();
-	const map = {
-		"اتاق خواب": "bedroom",
-		خواب: "bedroom",
-		مستر: "master_bedroom",
-		کودک: "kids_room",
-		مهمان: "guest_room",
-		پذیرایی: "living_room",
-		نشیمن: "living_room",
-		هال: "living_room",
-		آشپزخانه: "kitchen",
-		آشپز: "kitchen",
-		اپن: "open_kitchen",
-		حمام: "bathroom",
-		دستشویی: "wc",
-		سرویس: "wc",
-		بالکن: "balcony",
-		تراس: "terrace",
-		انباری: "storage",
-		انبار: "storage",
-		پارکینگ: "parking",
-		راهرو: "corridor",
-		ورودی: "entrance",
-		مطالعه: "study",
-		دفتر: "office",
-	};
-	for (const key in map) {
-		if (n.includes(key)) return map[key];
+window.addEventListener("resize", resizeCanvas);
+
+// ═══════════════════════════════════════════════
+// رسم اصلی
+// ═══════════════════════════════════════════════
+function redraw() {
+	const dpr = Math.min(window.devicePixelRatio || 1, 2);
+	const w = wrapper.clientWidth;
+	const h = wrapper.clientHeight;
+
+	ctx.save();
+	ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+	ctx.fillStyle = "#fafbfc";
+	ctx.fillRect(0, 0, w, h);
+	ctx.restore();
+
+	ctx.save();
+	ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+	ctx.translate(view.offsetX, view.offsetY);
+	ctx.scale(view.scale, view.scale);
+
+	// پله‌های AI (قبل از همه)
+	drawStairsAI(detectedStairs);
+
+	// همه‌ی اشیاء
+	objects.forEach((o) => drawObject(o));
+
+	// پیش‌نمایش رسم
+	if (isDrawing && startPoint && currentPoint) {
+		drawPreview();
 	}
-	return "unknown";
+
+	// انتخاب
+	if (selectedId) {
+		const sel = objects.find((o) => o.id === selectedId);
+		if (sel) drawSelectionIndicator(sel);
+	}
+
+	ctx.restore();
+
+	// نمایشگر زوم
+	zoomIndicator.textContent = `${Math.round(view.scale * 100)}%`;
 }
 
 function drawPreview() {
-	if (!startPoint || !currentPoint) return;
+	const s = startPoint;
+	const c = currentPoint;
+
 	ctx.save();
-
-	ctx.translate(view.offsetX, view.offsetY);
-	ctx.scale(view.scale, view.scale);
-
-	ctx.setLineDash([5 / view.scale, 5 / view.scale]);
-	ctx.strokeStyle = mode === "wall" ? "#e74c3c" : mode === "room" ? "#3498db" : mode === "door" ? "#8B4513" : mode === "window" ? "#3498DB" : "#888";
+	ctx.setLineDash([6 / view.scale, 4 / view.scale]);
+	ctx.strokeStyle = "#3498db";
 	ctx.lineWidth = 2 / view.scale;
 
-	if (mode === "room") {
-		const x = Math.min(startPoint.x, currentPoint.x);
-		const y = Math.min(startPoint.y, currentPoint.y);
-		const w = Math.abs(currentPoint.x - startPoint.x);
-		const h = Math.abs(currentPoint.y - startPoint.y);
+	if (currentTool === "wall" || currentTool === "door" || currentTool === "window" || currentTool === "arrow") {
+		ctx.beginPath();
+		ctx.moveTo(s.x, s.y);
+		ctx.lineTo(c.x, c.y);
+		ctx.stroke();
+	} else if (currentTool === "rect" || currentTool === "room") {
+		const x = Math.min(s.x, c.x);
+		const y = Math.min(s.y, c.y);
+		const w = Math.abs(c.x - s.x);
+		const h = Math.abs(c.y - s.y);
 		ctx.strokeRect(x, y, w, h);
-	} else {
+	} else if (currentTool === "circle") {
+		const r = Math.hypot(c.x - s.x, c.y - s.y);
 		ctx.beginPath();
-		ctx.moveTo(startPoint.x, startPoint.y);
-		ctx.lineTo(currentPoint.x, currentPoint.y);
+		ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
 		ctx.stroke();
 	}
 	ctx.restore();
 }
 
-// ═══════════════════════════════════════════════
-// رسم کامل
-// ═══════════════════════════════════════════════
-function redraw() {
-	ctx.clearRect(0, 0, canvas.width, canvas.height);
-	ctx.fillStyle = "#fafbfc";
-	ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-	ctx.save();
-	ctx.translate(view.offsetX, view.offsetY);
-	ctx.scale(view.scale, view.scale);
-
-	const layers = mapSettings.layers;
-
-	if (layers.grid) drawGrid();
-
-	if (layers.rooms) {
-		const detectedRooms = findRooms(walls);
-		detectedRooms.forEach((room, i) => drawRoomFill(room, i));
-	}
-
-	if (layers.walls) drawWalls(walls);
-	if (layers.windows) drawWindows(windows);
-	if (layers.doors) drawDoors(doors);
-	if (layers.stairs) drawStairs(detectedStairs);
-
-	if (layers.roomLabels) {
-		const detectedRooms = findRooms(walls);
-		detectedRooms.forEach((room, i) => drawRoomLabel(room, i));
-	}
-
-	rooms.forEach((r) => {
-		ctx.fillStyle = "rgba(52, 152, 219, 0.10)";
-		ctx.fillRect(r.x, r.y, r.w, r.h);
-		ctx.strokeStyle = "#3498db";
-		ctx.lineWidth = 2 / view.scale;
-		ctx.strokeRect(r.x, r.y, r.w, r.h);
-		if (layers.roomLabels && r.name) {
-			ctx.fillStyle = "#2c3e50";
-			ctx.font = `bold ${14 / view.scale}px Tahoma`;
-			ctx.textAlign = "center";
-			ctx.fillText(r.name, r.x + r.w / 2, r.y + r.h / 2);
-		}
-	});
-
-	ctx.restore();
-
-	if (layers.compass) drawCompassOnCanvas();
-
-	drawZoomIndicator();
-}
-
-function drawZoomIndicator() {
-	const text = `🔍 ${Math.round(view.scale * 100)}%`;
-	ctx.save();
-	ctx.font = "bold 12px Tahoma";
-	ctx.textAlign = "left";
-	ctx.textBaseline = "top";
-	const padding = 6;
-	const metrics = ctx.measureText(text);
-	const w = metrics.width + padding * 2;
-	const h = 22;
-
-	ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
-	roundRect(ctx, 10, 10, w, h, 6);
-	ctx.fill();
-	ctx.strokeStyle = "#dfe6e9";
-	ctx.lineWidth = 1;
-	ctx.stroke();
-
-	ctx.fillStyle = "#2c3e50";
-	ctx.fillText(text, 10 + padding, 10 + 5);
-	ctx.restore();
-}
-
-function drawDoors(doors) {
-	if (!doors || doors.length === 0) return;
+function drawObject(o) {
 	ctx.save();
 
-	doors.forEach((d) => {
-		const len = Math.hypot(d.x2 - d.x1, d.y2 - d.y1);
-		if (len < 3) return;
-
-		ctx.strokeStyle = "#fafbfc";
-		ctx.lineWidth = 8 / view.scale;
-		ctx.beginPath();
-		ctx.moveTo(d.x1, d.y1);
-		ctx.lineTo(d.x2, d.y2);
-		ctx.stroke();
-
-		ctx.strokeStyle = "#8B4513";
-		ctx.lineWidth = 3 / view.scale;
-		const angle = Math.atan2(d.y2 - d.y1, d.x2 - d.x1);
-		const doorAngle = angle - Math.PI / 2;
-		const dx = d.x1 + Math.cos(doorAngle) * len;
-		const dy = d.y1 + Math.sin(doorAngle) * len;
-		ctx.beginPath();
-		ctx.moveTo(d.x1, d.y1);
-		ctx.lineTo(dx, dy);
-		ctx.stroke();
-
-		ctx.beginPath();
-		ctx.arc(d.x1, d.y1, len, angle, doorAngle, angle > doorAngle);
-		ctx.stroke();
-	});
-	ctx.restore();
-}
-
-function drawWindows(windows) {
-	if (!windows || windows.length === 0) return;
-	ctx.save();
-
-	windows.forEach((w) => {
-		const len = Math.hypot(w.x2 - w.x1, w.y2 - w.y1);
-		if (len < 3) return;
-
-		ctx.strokeStyle = "#fafbfc";
-		ctx.lineWidth = 8 / view.scale;
-		ctx.beginPath();
-		ctx.moveTo(w.x1, w.y1);
-		ctx.lineTo(w.x2, w.y2);
-		ctx.stroke();
-
-		const angle = Math.atan2(w.y2 - w.y1, w.x2 - w.x1);
-		const perp = angle + Math.PI / 2;
-		const offset = 3;
-
-		ctx.strokeStyle = "#3498DB";
-		ctx.lineWidth = 2 / view.scale;
-		for (const sign of [-1, 1]) {
-			const ox = Math.cos(perp) * offset * sign;
-			const oy = Math.sin(perp) * offset * sign;
-			ctx.beginPath();
-			ctx.moveTo(w.x1 + ox, w.y1 + oy);
-			ctx.lineTo(w.x2 + ox, w.y2 + oy);
-			ctx.stroke();
-		}
-	});
-	ctx.restore();
-}
-
-function drawCompassOnCanvas() {
-	ctx.save();
-	ctx.setTransform(1, 0, 0, 1, 0, 0);
-
-	const c = mapSettings.compass;
-	const r = c.size;
-	const cx = c.x;
-	const cy = c.y;
-
-	ctx.strokeStyle = "#2c3e50";
-	ctx.lineWidth = 2;
-
-	ctx.beginPath();
-	ctx.arc(cx, cy, r, 0, Math.PI * 2);
-	ctx.stroke();
-
-	const dirs = {
-		north: -Math.PI / 2,
-		south: Math.PI / 2,
-		east: 0,
-		west: Math.PI,
-	};
-	const baseAngle = dirs[c.direction] ?? -Math.PI / 2;
-	const tipX = cx + Math.cos(baseAngle) * (r - 8);
-	const tipY = cy + Math.sin(baseAngle) * (r - 8);
-
-	ctx.fillStyle = "#E74C3C";
-	ctx.beginPath();
-	ctx.moveTo(tipX, tipY);
-	ctx.lineTo(cx + Math.cos(baseAngle - 0.4) * (r - 14), cy + Math.sin(baseAngle - 0.4) * (r - 14));
-	ctx.lineTo(cx + Math.cos(baseAngle + 0.4) * (r - 14), cy + Math.sin(baseAngle + 0.4) * (r - 14));
-	ctx.closePath();
-	ctx.fill();
-
-	ctx.fillStyle = "#2c3e50";
-	ctx.font = `bold ${Math.floor(r * 0.6)}px Tahoma`;
-	ctx.textAlign = "center";
-	ctx.textBaseline = "middle";
-	ctx.fillText("N", cx, cy - r - 12);
-
-	ctx.restore();
-}
-
-function drawStairs(stairs) {
-	if (!stairs || stairs.length === 0) return;
-
-	stairs.forEach((stair) => {
-		ctx.strokeStyle = "#e67e22";
-		ctx.lineWidth = 2 / view.scale;
+	if (o.type === "wall") {
+		ctx.strokeStyle = o.color || DEFAULT_STYLE.wall.color;
+		ctx.lineWidth = (o.width || DEFAULT_STYLE.wall.width) / view.scale;
 		ctx.lineCap = "round";
-
-		if (stair.lines && Array.isArray(stair.lines)) {
-			stair.lines.forEach((line) => {
-				ctx.beginPath();
-				ctx.moveTo(line.x1, line.y1);
-				ctx.lineTo(line.x2, line.y2);
-				ctx.stroke();
-			});
-		}
-
-		ctx.strokeStyle = "#d35400";
+		ctx.beginPath();
+		ctx.moveTo(o.x1, o.y1);
+		ctx.lineTo(o.x2, o.y2);
+		ctx.stroke();
+	} else if (o.type === "door") {
+		drawDoor(o);
+	} else if (o.type === "window") {
+		drawWindow(o);
+	} else if (o.type === "room") {
+		ctx.strokeStyle = o.color || DEFAULT_STYLE.room.color;
 		ctx.lineWidth = 2 / view.scale;
 		ctx.setLineDash([6 / view.scale, 4 / view.scale]);
-		ctx.strokeRect(stair.x, stair.y, stair.width, stair.height);
+		ctx.strokeRect(o.x, o.y, o.w, o.h);
 		ctx.setLineDash([]);
-
-		const cx = stair.x + stair.width / 2;
-		const cy = stair.y + stair.height / 2;
-
-		const label = `🪜 ${stair.step_count}`;
-		ctx.font = `bold ${12 / view.scale}px Tahoma`;
-		const textWidth = ctx.measureText(label).width;
-		const padding = 4 / view.scale;
-
-		ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
-		ctx.strokeStyle = "#d35400";
-		ctx.lineWidth = 1.5 / view.scale;
-		roundRect(ctx, cx - textWidth / 2 - padding, cy - 9 / view.scale - padding, textWidth + padding * 2, 18 / view.scale + padding * 2, 6 / view.scale);
-		ctx.fill();
-		ctx.stroke();
-
-		ctx.fillStyle = "#d35400";
-		ctx.textAlign = "center";
-		ctx.textBaseline = "middle";
-		ctx.fillText(label, cx, cy);
-	});
-}
-
-function drawWalls(lines) {
-	ctx.strokeStyle = "#2c3e50";
-	ctx.lineWidth = 4 / view.scale;
-	ctx.lineCap = "round";
-	ctx.lineJoin = "round";
-	lines.forEach((w) => {
+		ctx.fillStyle = "rgba(52, 152, 219, 0.1)";
+		ctx.fillRect(o.x, o.y, o.w, o.h);
+	} else if (o.type === "rect") {
+		ctx.strokeStyle = o.color || DEFAULT_STYLE.rect.color;
+		ctx.lineWidth = (o.width || DEFAULT_STYLE.rect.width) / view.scale;
+		if (o.fill && o.fill !== "transparent") {
+			ctx.fillStyle = o.fill;
+			ctx.fillRect(o.x, o.y, o.w, o.h);
+		}
+		ctx.strokeRect(o.x, o.y, o.w, o.h);
+	} else if (o.type === "circle") {
+		ctx.strokeStyle = o.color || DEFAULT_STYLE.circle.color;
+		ctx.lineWidth = (o.width || DEFAULT_STYLE.circle.width) / view.scale;
 		ctx.beginPath();
-		ctx.moveTo(w.x1, w.y1);
-		ctx.lineTo(w.x2, w.y2);
+		ctx.arc(o.x, o.y, o.r, 0, Math.PI * 2);
+		if (o.fill && o.fill !== "transparent") {
+			ctx.fillStyle = o.fill;
+			ctx.fill();
+		}
 		ctx.stroke();
-	});
+	} else if (o.type === "arrow") {
+		drawArrow(o);
+	} else if (o.type === "text") {
+		drawText(o);
+	}
+
+	ctx.restore();
 }
 
-function drawRoomFill(room, index) {
-	const colors = ["#e8f4f8", "#fef5e7", "#eafaf1", "#f4ecf7", "#fdedec", "#fef9e7", "#ebf5fb", "#e8f8f5"];
-	const color = colors[index % colors.length];
-	ctx.fillStyle = color;
-	roundRect(ctx, room.x + 3 / view.scale, room.y + 3 / view.scale, room.w - 6 / view.scale, room.h - 6 / view.scale, 8 / view.scale);
+function drawDoor(o) {
+	const len = Math.hypot(o.x2 - o.x1, o.y2 - o.y1);
+	if (len < 3) return;
+
+	ctx.strokeStyle = "#fafbfc";
+	ctx.lineWidth = 8 / view.scale;
+	ctx.beginPath();
+	ctx.moveTo(o.x1, o.y1);
+	ctx.lineTo(o.x2, o.y2);
+	ctx.stroke();
+
+	ctx.strokeStyle = o.color || DEFAULT_STYLE.door.color;
+	ctx.lineWidth = 3 / view.scale;
+
+	const angle = Math.atan2(o.y2 - o.y1, o.x2 - o.x1);
+	const doorAngle = angle - Math.PI / 2;
+	const dx = o.x1 + Math.cos(doorAngle) * len;
+	const dy = o.y1 + Math.sin(doorAngle) * len;
+
+	ctx.beginPath();
+	ctx.moveTo(o.x1, o.y1);
+	ctx.lineTo(dx, dy);
+	ctx.stroke();
+
+	ctx.beginPath();
+	ctx.arc(o.x1, o.y1, len, angle, doorAngle, angle > doorAngle);
+	ctx.stroke();
+}
+
+function drawWindow(o) {
+	const len = Math.hypot(o.x2 - o.x1, o.y2 - o.y1);
+	if (len < 3) return;
+
+	ctx.strokeStyle = "#fafbfc";
+	ctx.lineWidth = 8 / view.scale;
+	ctx.beginPath();
+	ctx.moveTo(o.x1, o.y1);
+	ctx.lineTo(o.x2, o.y2);
+	ctx.stroke();
+
+	const angle = Math.atan2(o.y2 - o.y1, o.x2 - o.x1);
+	const perp = angle + Math.PI / 2;
+	const offset = 3 / view.scale;
+
+	ctx.strokeStyle = o.color || DEFAULT_STYLE.window.color;
+	ctx.lineWidth = 2 / view.scale;
+	for (const sign of [-1, 1]) {
+		const ox = Math.cos(perp) * offset * sign;
+		const oy = Math.sin(perp) * offset * sign;
+		ctx.beginPath();
+		ctx.moveTo(o.x1 + ox, o.y1 + oy);
+		ctx.lineTo(o.x2 + ox, o.y2 + oy);
+		ctx.stroke();
+	}
+}
+
+function drawArrow(o) {
+	const angle = Math.atan2(o.y2 - o.y1, o.x2 - o.x1);
+	const len = Math.hypot(o.x2 - o.x1, o.y2 - o.y1);
+	const headLen = Math.min(20, len * 0.3) / view.scale;
+
+	ctx.strokeStyle = o.color || DEFAULT_STYLE.arrow.color;
+	ctx.fillStyle = o.color || DEFAULT_STYLE.arrow.color;
+	ctx.lineWidth = (o.width || DEFAULT_STYLE.arrow.width) / view.scale;
+	ctx.lineCap = "round";
+
+	// خط
+	ctx.beginPath();
+	ctx.moveTo(o.x1, o.y1);
+	ctx.lineTo(o.x2, o.y2);
+	ctx.stroke();
+
+	// سر فلش
+	const ax = o.x2 - Math.cos(angle) * headLen;
+	const ay = o.y2 - Math.sin(angle) * headLen;
+	const perp = angle + Math.PI / 2;
+	const w = headLen * 0.5;
+
+	ctx.beginPath();
+	ctx.moveTo(o.x2, o.y2);
+	ctx.lineTo(ax + Math.cos(perp) * w, ay + Math.sin(perp) * w);
+	ctx.lineTo(ax - Math.cos(perp) * w, ay - Math.sin(perp) * w);
+	ctx.closePath();
 	ctx.fill();
 }
 
-function drawRoomLabel(room, index) {
-	const areaM2 = ((room.w * room.h) / 10000).toFixed(1);
-	ctx.fillStyle = "#2c3e50";
-	ctx.font = `bold ${15 / view.scale}px Tahoma`;
-	ctx.textAlign = "center";
-	ctx.textBaseline = "middle";
-	ctx.fillText(`اتاق ${index + 1}`, room.x + room.w / 2, room.y + room.h / 2 - 10 / view.scale);
-	ctx.fillStyle = "#7f8c8d";
-	ctx.font = `${12 / view.scale}px Tahoma`;
-	ctx.fillText(`${areaM2} m²`, room.x + room.w / 2, room.y + room.h / 2 + 12 / view.scale);
+function drawText(o) {
+	const fontSize = o.fontSize || DEFAULT_STYLE.text.fontSize;
+	ctx.font = `bold ${fontSize}px Tahoma, sans-serif`;
+	ctx.textAlign = "right";
+	ctx.textBaseline = "top";
+
+	const metrics = ctx.measureText(o.text || "");
+	const tw = metrics.width;
+	const th = fontSize * 1.2;
+
+	// پس‌زمینه
+	if (o.bg && o.bg !== "transparent") {
+		ctx.fillStyle = o.bg;
+		const pad = 6;
+		roundRect(ctx, o.x - tw - pad, o.y - pad, tw + pad * 2, th + pad * 2, 6);
+		ctx.fill();
+	}
+
+	ctx.fillStyle = o.color || DEFAULT_STYLE.text.color;
+	ctx.fillText(o.text, o.x, o.y);
 }
 
 function roundRect(ctx, x, y, w, h, r) {
@@ -897,246 +502,812 @@ function roundRect(ctx, x, y, w, h, r) {
 	ctx.closePath();
 }
 
-function drawGrid() {
-	const baseStep = 25;
-	const startX = Math.floor(-view.offsetX / view.scale / baseStep) * baseStep;
-	const startY = Math.floor(-view.offsetY / view.scale / baseStep) * baseStep;
+function drawStairsAI(stairs) {
+	if (!stairs || stairs.length === 0) return;
 
-	const endX = startX + canvas.width / view.scale + baseStep;
-	const endY = startY + canvas.height / view.scale + baseStep;
+	stairs.forEach((stair) => {
+		ctx.save();
+		ctx.strokeStyle = "#e67e22";
+		ctx.lineWidth = 1.5 / view.scale;
 
-	ctx.fillStyle = "#dfe6e9";
-	for (let x = startX; x < endX; x += baseStep) {
-		for (let y = startY; y < endY; y += baseStep) {
-			ctx.beginPath();
-			ctx.arc(x, y, 0.8 / view.scale, 0, Math.PI * 2);
-			ctx.fill();
+		if (stair.lines) {
+			stair.lines.forEach((line) => {
+				ctx.beginPath();
+				ctx.moveTo(line.x1, line.y1);
+				ctx.lineTo(line.x2, line.y2);
+				ctx.stroke();
+			});
 		}
-	}
-}
 
-function updateRoomCount() {
-	roomCountEl.textContent = `تعداد اتاق: ${rooms.length}`;
-}
+		ctx.strokeStyle = "#d35400";
+		ctx.setLineDash([5 / view.scale, 3 / view.scale]);
+		ctx.strokeRect(stair.x, stair.y, stair.width, stair.height);
+		ctx.setLineDash([]);
 
-// ═══════════════════════════════════════════════
-// پیدا کردن اتاق‌ها
-// ═══════════════════════════════════════════════
-function findRooms(lines) {
-	if (lines.length < 4) return [];
-	const h = lines.filter((l) => Math.abs(l.y1 - l.y2) < 2);
-	const v = lines.filter((l) => Math.abs(l.x1 - l.x2) < 2);
-	if (h.length < 2 || v.length < 2) return [];
+		const cx = stair.x + stair.width / 2;
+		const cy = stair.y + stair.height / 2;
 
-	const corners = [];
-	h.forEach((hl) => {
-		v.forEach((vl) => {
-			const x = vl.x1;
-			const y = hl.y1;
-			const onH = x >= Math.min(hl.x1, hl.x2) - 10 && x <= Math.max(hl.x1, hl.x2) + 10;
-			const onV = y >= Math.min(vl.y1, vl.y2) - 10 && y <= Math.max(vl.y1, vl.y2) + 10;
-			if (onH && onV) {
-				if (!corners.some((c) => Math.abs(c.x - x) < 5 && Math.abs(c.y - y) < 5)) {
-					corners.push({ x, y });
-				}
-			}
-		});
+		ctx.fillStyle = "rgba(230, 126, 34, 0.15)";
+		ctx.fillRect(stair.x, stair.y, stair.width, stair.height);
+
+		ctx.fillStyle = "#d35400";
+		ctx.font = `bold ${12 / view.scale}px Tahoma`;
+		ctx.textAlign = "center";
+		ctx.textBaseline = "middle";
+		ctx.fillText(`🪜${stair.step_count}`, cx, cy);
+
+		ctx.restore();
 	});
+}
 
-	if (corners.length < 4) return [];
+function drawSelectionIndicator(o) {
+	ctx.save();
+	ctx.strokeStyle = "#3498db";
+	ctx.lineWidth = 2 / view.scale;
+	ctx.setLineDash([4 / view.scale, 3 / view.scale]);
 
-	const detected = [];
-	const used = new Set();
-
-	for (let i = 0; i < corners.length; i++) {
-		if (used.has(i)) continue;
-		const c1 = corners[i];
-		for (let j = i + 1; j < corners.length; j++) {
-			if (used.has(j)) continue;
-			const c2 = corners[j];
-			if (Math.abs(c1.y - c2.y) > 5) continue;
-			if (c2.x <= c1.x + 30) continue;
-			for (let k = i + 1; k < corners.length; k++) {
-				if (used.has(k) || k === j) continue;
-				const c3 = corners[k];
-				if (Math.abs(c1.x - c3.x) > 5) continue;
-				if (c3.y <= c1.y + 30) continue;
-				for (let l = k + 1; l < corners.length; l++) {
-					if (used.has(l) || l === j) continue;
-					const c4 = corners[l];
-					if (Math.abs(c2.x - c4.x) > 5) continue;
-					if (Math.abs(c3.y - c4.y) > 5) continue;
-					const w = c2.x - c1.x;
-					const hh = c3.y - c1.y;
-					if (w < 40 || hh < 40) continue;
-					detected.push({ x: c1.x, y: c1.y, w, h: hh, area: w * hh });
-					used.add(i);
-					used.add(j);
-					used.add(k);
-					used.add(l);
-					break;
-				}
-				if (used.has(i)) break;
-			}
-			if (used.has(i)) break;
-		}
+	const b = getObjectBounds(o);
+	if (b) {
+		ctx.strokeRect(b.x - 4 / view.scale, b.y - 4 / view.scale, b.w + 8 / view.scale, b.h + 8 / view.scale);
 	}
+	ctx.restore();
+}
 
-	const filtered = [];
-	for (const r of detected) {
-		let isInside = false;
-		for (const other of detected) {
-			if (r === other) continue;
-			if (r.x >= other.x && r.y >= other.y && r.x + r.w <= other.x + other.w && r.y + r.h <= other.y + other.h) {
-				isInside = true;
-				break;
-			}
-		}
-		if (!isInside) filtered.push(r);
+function getObjectBounds(o) {
+	if (o.type === "wall" || o.type === "door" || o.type === "window" || o.type === "arrow") {
+		return {
+			x: Math.min(o.x1, o.x2),
+			y: Math.min(o.y1, o.y2),
+			w: Math.abs(o.x2 - o.x1),
+			h: Math.abs(o.y2 - o.y1),
+		};
+	} else if (o.type === "rect" || o.type === "room") {
+		return { x: o.x, y: o.y, w: o.w, h: o.h };
+	} else if (o.type === "circle") {
+		return { x: o.x - o.r, y: o.y - o.r, w: o.r * 2, h: o.r * 2 };
+	} else if (o.type === "text") {
+		const fontSize = o.fontSize || 20;
+		ctx.save();
+		ctx.font = `bold ${fontSize}px Tahoma, sans-serif`;
+		const tw = ctx.measureText(o.text || "").width;
+		ctx.restore();
+		return { x: o.x - tw, y: o.y, w: tw, h: fontSize * 1.2 };
 	}
-	return filtered;
+	return null;
 }
 
 // ═══════════════════════════════════════════════
-// ذخیره پلان
+// برخورد (Hit test)
 // ═══════════════════════════════════════════════
-savePlanBtn.onclick = async () => {
-	if (walls.length === 0 && rooms.length === 0) return alert("نقشه خالیه!");
-	try {
-		const res = await fetch("/api/plans", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				walls,
-				rooms,
-				stairs: detectedStairs,
-				doors,
-				windows,
-				compass: mapSettings.compass,
-				layers: mapSettings.layers,
-				style: mapSettings.style,
-				title: mapSettings.title,
-				imageWidth: planImageWidth,
-				imageHeight: planImageHeight,
-			}),
-		});
-		const data = await res.json();
-		if (data.success) {
-			alert("✅ نقشه ذخیره شد");
-			loadPlans();
-		}
-	} catch (err) {
-		alert("❌ خطا: " + err.message);
+function hitTest(pt) {
+	// از آخر به اول (آخرین شیء بالاتره)
+	for (let i = objects.length - 1; i >= 0; i--) {
+		const o = objects[i];
+		if (isPointInObject(pt, o)) return o;
 	}
-};
+	return null;
+}
+
+function isPointInObject(pt, o) {
+	const tol = 12 / view.scale;
+
+	if (o.type === "wall" || o.type === "door" || o.type === "window" || o.type === "arrow") {
+		return pointToSegmentDist(pt.x, pt.y, o.x1, o.y1, o.x2, o.y2) < tol;
+	} else if (o.type === "rect" || o.type === "room") {
+		return pt.x >= o.x - tol && pt.x <= o.x + o.w + tol && pt.y >= o.y - tol && pt.y <= o.y + o.h + tol;
+	} else if (o.type === "circle") {
+		const d = Math.hypot(pt.x - o.x, pt.y - o.y);
+		return d <= o.r + tol;
+	} else if (o.type === "text") {
+		const b = getObjectBounds(o);
+		if (!b) return false;
+		return pt.x >= b.x - tol && pt.x <= b.x + b.w + tol && pt.y >= b.y - tol && pt.y <= b.y + b.h + tol;
+	}
+	return false;
+}
+
+function pointToSegmentDist(px, py, x1, y1, x2, y2) {
+	const dx = x2 - x1;
+	const dy = y2 - y1;
+	const lenSq = dx * dx + dy * dy;
+	if (lenSq === 0) return Math.hypot(px - x1, py - y1);
+	let t = ((px - x1) * dx + (py - y1) * dy) / lenSq;
+	t = Math.max(0, Math.min(1, t));
+	const cx = x1 + t * dx;
+	const cy = y1 + t * dy;
+	return Math.hypot(px - cx, py - cy);
+}
 
 // ═══════════════════════════════════════════════
-// لیست پلان‌ها
+// رویدادهای Pointer (پشتیبانی کامل موبایل + دسکتاپ)
 // ═══════════════════════════════════════════════
-async function loadPlans() {
-	const res = await fetch("/api/plans");
-	const plans = await res.json();
-	const list = document.getElementById("plansList");
-	if (plans.length === 0) {
-		list.textContent = "هنوز نقشه‌ای ذخیره نشده";
+let pointers = new Map(); // برای multipointer
+let pinchStart = null;
+
+canvas.addEventListener("pointerdown", (e) => {
+	canvas.setPointerCapture(e.pointerId);
+	pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+	// دو انگشت → زوم/پن
+	if (pointers.size === 2) {
+		isDrawing = false;
+		const pts = Array.from(pointers.values());
+		const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+		const mid = {
+			x: (pts[0].x + pts[1].x) / 2,
+			y: (pts[0].y + pts[1].y) / 2,
+		};
+		const rect = wrapper.getBoundingClientRect();
+		pinchStart = {
+			dist,
+			scale: view.scale,
+			midLocal: { x: mid.x - rect.left, y: mid.y - rect.top },
+			offsetX: view.offsetX,
+			offsetY: view.offsetY,
+		};
 		return;
 	}
-	list.innerHTML = plans
-		.map(
-			(p) => `
-    <div style="padding:10px;border-bottom:1px solid #eee;">
-      <strong>نقشه #${p.id}</strong> — 
-      ${p.walls?.length || 0} دیوار، 
-      ${p.rooms?.length || 0} اتاق،
-      ${p.stairs?.length || 0} پله
-      ${p.doors?.length ? `، ${p.doors.length} در` : ""}
-      ${p.windows?.length ? `، ${p.windows.length} پنجره` : ""}
-    </div>
-  `,
-		)
-		.join("");
+
+	// راست‌کلیک یا shift → پن
+	if (e.button === 2 || e.shiftKey) {
+		isPanning = true;
+		panStart = {
+			x: e.clientX,
+			y: e.clientY,
+			ox: view.offsetX,
+			oy: view.offsetY,
+		};
+		canvas.style.cursor = "grabbing";
+		return;
+	}
+
+	const pt = screenToWorld(e.clientX, e.clientY);
+
+	if (currentTool === "select") {
+		const hit = hitTest(pt);
+		if (hit) {
+			selectedId = hit.id;
+			updateSelectionUI();
+			draggingObject = hit;
+			dragOffset = { x: pt.x, y: pt.y };
+			canvas.style.cursor = "move";
+		} else {
+			selectedId = null;
+			updateSelectionUI();
+		}
+		redraw();
+		return;
+	}
+
+	if (currentTool === "eraser") {
+		const hit = hitTest(pt);
+		if (hit) {
+			pushHistory();
+			objects = objects.filter((o) => o.id !== hit.id);
+			redraw();
+		}
+		return;
+	}
+
+	if (currentTool === "text") {
+		// نمایش input شناور
+		showTextInput(e.clientX, e.clientY);
+		return;
+	}
+
+	// بقیه ابزارها → شروع رسم
+	isDrawing = true;
+	startPoint = pt;
+	currentPoint = pt;
+});
+
+canvas.addEventListener("pointermove", (e) => {
+	if (pointers.has(e.pointerId)) {
+		pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+	}
+
+	// دو انگشت → زوم/پن
+	if (pointers.size === 2 && pinchStart) {
+		const pts = Array.from(pointers.values());
+		const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+		const mid = {
+			x: (pts[0].x + pts[1].x) / 2,
+			y: (pts[0].y + pts[1].y) / 2,
+		};
+		const rect = wrapper.getBoundingClientRect();
+		const midLocal = { x: mid.x - rect.left, y: mid.y - rect.top };
+
+		const newScale = Math.max(0.1, Math.min(20, pinchStart.scale * (dist / pinchStart.dist)));
+		const ratio = newScale / pinchStart.scale;
+
+		view.scale = newScale;
+		view.offsetX = midLocal.x - (pinchStart.midLocal.x - pinchStart.offsetX) * ratio;
+		view.offsetY = midLocal.y - (pinchStart.midLocal.y - pinchStart.offsetY) * ratio;
+		redraw();
+		return;
+	}
+
+	// پن
+	if (isPanning) {
+		const dx = e.clientX - panStart.x;
+		const dy = e.clientY - panStart.y;
+		view.offsetX = panStart.ox + dx;
+		view.offsetY = panStart.oy + dy;
+		redraw();
+		return;
+	}
+
+	// درگ کردن شیء انتخاب‌شده
+	if (draggingObject) {
+		const pt = screenToWorld(e.clientX, e.clientY);
+		const dx = pt.x - dragOffset.x;
+		const dy = pt.y - dragOffset.y;
+		moveObject(draggingObject, dx, dy);
+		dragOffset = { x: pt.x, y: pt.y };
+		redraw();
+		return;
+	}
+
+	// رسم
+	if (isDrawing) {
+		currentPoint = screenToWorld(e.clientX, e.clientY);
+		redraw();
+	}
+});
+
+canvas.addEventListener("pointerup", (e) => {
+	pointers.delete(e.pointerId);
+	if (pointers.size < 2) pinchStart = null;
+
+	if (isPanning) {
+		isPanning = false;
+		canvas.style.cursor = currentTool === "select" ? "default" : "crosshair";
+		return;
+	}
+
+	if (draggingObject) {
+		pushHistory();
+		draggingObject = null;
+		canvas.style.cursor = "default";
+		return;
+	}
+
+	if (!isDrawing) return;
+	isDrawing = false;
+
+	if (startPoint && currentPoint) {
+		const dist = Math.hypot(currentPoint.x - startPoint.x, currentPoint.y - startPoint.y);
+		if (dist > 5) {
+			pushHistory();
+			createObject(currentTool, startPoint, currentPoint);
+		}
+	}
+
+	startPoint = null;
+	currentPoint = null;
+	redraw();
+});
+
+canvas.addEventListener("pointercancel", (e) => {
+	pointers.delete(e.pointerId);
+	isDrawing = false;
+	isPanning = false;
+	draggingObject = null;
+	pinchStart = null;
+});
+
+canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+
+// ═══════════════════════════════════════════════
+// ساخت شیء
+// ═══════════════════════════════════════════════
+function createObject(tool, s, c) {
+	const id = uid();
+	let obj = null;
+
+	if (tool === "wall") {
+		obj = { id, type: "wall", x1: s.x, y1: s.y, x2: c.x, y2: c.y, ...DEFAULT_STYLE.wall };
+	} else if (tool === "door") {
+		obj = { id, type: "door", x1: s.x, y1: s.y, x2: c.x, y2: c.y, ...DEFAULT_STYLE.door };
+	} else if (tool === "window") {
+		obj = { id, type: "window", x1: s.x, y1: s.y, x2: c.x, y2: c.y, ...DEFAULT_STYLE.window };
+	} else if (tool === "arrow") {
+		obj = { id, type: "arrow", x1: s.x, y1: s.y, x2: c.x, y2: c.y, ...DEFAULT_STYLE.arrow };
+	} else if (tool === "rect") {
+		obj = {
+			id,
+			type: "rect",
+			x: Math.min(s.x, c.x),
+			y: Math.min(s.y, c.y),
+			w: Math.abs(c.x - s.x),
+			h: Math.abs(c.y - s.y),
+			...DEFAULT_STYLE.rect,
+		};
+	} else if (tool === "room") {
+		obj = {
+			id,
+			type: "room",
+			x: Math.min(s.x, c.x),
+			y: Math.min(s.y, c.y),
+			w: Math.abs(c.x - s.x),
+			h: Math.abs(c.y - s.y),
+			color: DEFAULT_STYLE.room.color,
+		};
+	} else if (tool === "circle") {
+		obj = {
+			id,
+			type: "circle",
+			x: s.x,
+			y: s.y,
+			r: Math.hypot(c.x - s.x, c.y - s.y),
+			...DEFAULT_STYLE.circle,
+		};
+	}
+
+	if (obj) {
+		objects.push(obj);
+		selectedId = obj.id;
+		updateSelectionUI();
+	}
 }
 
 // ═══════════════════════════════════════════════
-// پنل تنظیمات
+// جابجایی شیء
 // ═══════════════════════════════════════════════
-const settingsPanel = document.getElementById("settingsPanel");
+function moveObject(o, dx, dy) {
+	if (o.type === "wall" || o.type === "door" || o.type === "window" || o.type === "arrow") {
+		o.x1 += dx;
+		o.y1 += dy;
+		o.x2 += dx;
+		o.y2 += dy;
+	} else if (o.type === "rect" || o.type === "room" || o.type === "text") {
+		o.x += dx;
+		o.y += dy;
+	} else if (o.type === "circle") {
+		o.x += dx;
+		o.y += dy;
+	}
+}
+
+// ═══════════════════════════════════════════════
+// Input متن شناور
+// ═══════════════════════════════════════════════
+let pendingTextPos = null;
+
+function showTextInput(clientX, clientY) {
+	const rect = wrapper.getBoundingClientRect();
+	const localX = clientX - rect.left;
+	const localY = clientY - rect.top;
+
+	textInput.style.display = "block";
+	textInput.style.left = Math.max(10, localX - 150) + "px";
+	textInput.style.top = localY - 20 + "px";
+	textInput.value = "";
+	textInput.focus();
+
+	pendingTextPos = screenToWorld(clientX, clientY);
+}
+
+function commitTextInput() {
+	const val = textInput.value.trim();
+	textInput.style.display = "none";
+	textInput.value = "";
+
+	if (!val || !pendingTextPos) {
+		pendingTextPos = null;
+		return;
+	}
+
+	pushHistory();
+	const id = uid();
+	objects.push({
+		id,
+		type: "text",
+		x: pendingTextPos.x,
+		y: pendingTextPos.y,
+		text: val,
+		color: DEFAULT_STYLE.text.color,
+		fontSize: DEFAULT_STYLE.text.fontSize,
+		bg: DEFAULT_STYLE.text.bg,
+	});
+	pendingTextPos = null;
+	redraw();
+}
+
+textInput.addEventListener("keydown", (e) => {
+	if (e.key === "Enter") {
+		e.preventDefault();
+		commitTextInput();
+	} else if (e.key === "Escape") {
+		textInput.style.display = "none";
+		textInput.value = "";
+		pendingTextPos = null;
+	}
+});
+
+textInput.addEventListener("blur", () => {
+	if (textInput.style.display !== "none" && textInput.value.trim()) {
+		commitTextInput();
+	} else {
+		textInput.style.display = "none";
+		pendingTextPos = null;
+	}
+});
+
+// ═══════════════════════════════════════════════
+// پنل خصوصیات
+// ═══════════════════════════════════════════════
+function updateSelectionUI() {
+	if (!selectedId) {
+		selectionInfo.textContent = "هیچ‌چیز انتخاب نشده";
+		deleteBtn.style.display = "none";
+		return;
+	}
+
+	const o = objects.find((x) => x.id === selectedId);
+	if (!o) return;
+
+	selectionInfo.textContent = `انتخاب: ${objectTypeName(o.type)}`;
+	deleteBtn.style.display = "block";
+
+	// رنگ
+	if (o.color) propColor.value = o.color;
+
+	// ضخامت
+	if (o.width !== undefined) {
+		propWidth.value = o.width;
+		propWidth.parentElement.style.display = "flex";
+	} else {
+		propWidth.parentElement.style.display = "none";
+	}
+
+	// فونت
+	if (o.type === "text") {
+		fontRow.style.display = "flex";
+		propFontSize.value = o.fontSize || 20;
+	} else {
+		fontRow.style.display = "none";
+	}
+
+	// پرکردن
+	if (o.type === "rect" || o.type === "circle") {
+		fillRow.style.display = "flex";
+		propFill.value = o.fill && o.fill !== "transparent" ? o.fill : "#ffffff";
+	} else {
+		fillRow.style.display = "none";
+	}
+}
+
+function objectTypeName(t) {
+	return (
+		{
+			wall: "دیوار",
+			door: "در",
+			window: "پنجره",
+			room: "اتاق",
+			rect: "مستطیل",
+			circle: "دایره",
+			arrow: "فلش",
+			text: "متن",
+		}[t] || t
+	);
+}
+
+deleteBtn.onclick = () => {
+	if (!selectedId) return;
+	pushHistory();
+	objects = objects.filter((o) => o.id !== selectedId);
+	selectedId = null;
+	updateSelectionUI();
+	redraw();
+};
+
+propColor.addEventListener("input", (e) => {
+	if (!selectedId) return;
+	const o = objects.find((x) => x.id === selectedId);
+	if (o) {
+		o.color = e.target.value;
+		redraw();
+	}
+});
+
+propColor.addEventListener("change", () => {
+	if (selectedId) pushHistory();
+});
+
+propWidth.addEventListener("input", (e) => {
+	if (!selectedId) return;
+	const o = objects.find((x) => x.id === selectedId);
+	if (o && o.width !== undefined) {
+		o.width = parseInt(e.target.value);
+		redraw();
+	}
+});
+
+propWidth.addEventListener("change", () => {
+	if (selectedId) pushHistory();
+});
+
+propFill.addEventListener("input", (e) => {
+	if (!selectedId) return;
+	const o = objects.find((x) => x.id === selectedId);
+	if (o) {
+		o.fill = e.target.value;
+		redraw();
+	}
+});
+
+propFill.addEventListener("change", () => {
+	if (selectedId) pushHistory();
+});
+
+propFontSize.addEventListener("input", (e) => {
+	if (!selectedId) return;
+	const o = objects.find((x) => x.id === selectedId);
+	if (o && o.type === "text") {
+		o.fontSize = parseInt(e.target.value);
+		redraw();
+	}
+});
+
+propFontSize.addEventListener("change", () => {
+	if (selectedId) pushHistory();
+});
+
+// دوبار کلیک روی متن → ویرایش
+canvas.addEventListener("dblclick", (e) => {
+	const pt = screenToWorld(e.clientX, e.clientY);
+	const hit = hitTest(pt);
+	if (hit && hit.type === "text") {
+		const newText = prompt("متن جدید:", hit.text);
+		if (newText !== null && newText.trim()) {
+			pushHistory();
+			hit.text = newText.trim();
+			redraw();
+		}
+	}
+});
+
+// ═══════════════════════════════════════════════
+// دکمه‌های زوم
+// ═══════════════════════════════════════════════
+document.getElementById("zoomIn").onclick = () => {
+	const cx = wrapper.clientWidth / 2;
+	const cy = wrapper.clientHeight / 2;
+	zoomAt(cx, cy, 1.2);
+};
+document.getElementById("zoomOut").onclick = () => {
+	const cx = wrapper.clientWidth / 2;
+	const cy = wrapper.clientHeight / 2;
+	zoomAt(cx, cy, 1 / 1.2);
+};
+document.getElementById("zoomFit").onclick = () => fitToScreen();
+document.getElementById("zoomReset").onclick = () => resetView();
+
+// ═══════════════════════════════════════════════
+// کیبورد
+// ═══════════════════════════════════════════════
+document.addEventListener("keydown", (e) => {
+	if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+
+	if (e.key === "Delete" || e.key === "Backspace") {
+		if (selectedId) {
+			e.preventDefault();
+			deleteBtn.click();
+		}
+	} else if (e.key === "Escape") {
+		selectedId = null;
+		updateSelectionUI();
+		redraw();
+	} else if ((e.ctrlKey || e.metaKey) && e.key === "z") {
+		e.preventDefault();
+		if (e.shiftKey) redo();
+		else undo();
+	}
+});
+
+// ═══════════════════════════════════════════════
+// آپلود و تشخیص AI
+// ═══════════════════════════════════════════════
+const fileInput = document.getElementById("fileInput");
+const detectBtn = document.getElementById("detectBtn");
+const uploadStatus = document.getElementById("uploadStatus");
+let uploadedFilename = null;
+
+fileInput.addEventListener("change", async (e) => {
+	const file = e.target.files[0];
+	if (!file) return;
+
+	uploadStatus.textContent = "⏳ در حال آپلود...";
+
+	const fd = new FormData();
+	fd.append("floorPlan", file);
+
+	try {
+		const res = await fetch("/api/upload", { method: "POST", body: fd });
+		const data = await res.json();
+		if (data.success) {
+			uploadStatus.textContent = "✅ آپلود شد";
+			uploadedFilename = data.filename;
+			detectBtn.disabled = false;
+		} else {
+			uploadStatus.textContent = "❌ " + (data.detail || "خطا");
+		}
+	} catch (err) {
+		uploadStatus.textContent = "❌ " + err.message;
+	}
+});
+
+detectBtn.addEventListener("click", async () => {
+	if (!uploadedFilename) return;
+	detectBtn.disabled = true;
+	uploadStatus.textContent = "🤖 در حال تشخیص...";
+
+	try {
+		const res = await fetch("/api/detect-lines", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ filename: uploadedFilename }),
+		});
+		const data = await res.json();
+
+		if (data.success) {
+			planImageWidth = data.imageWidth || 1000;
+			planImageHeight = data.imageHeight || 700;
+			detectedStairs = data.stairs || [];
+
+			// اضافه کردن دیوارها به عنوان شیء
+			pushHistory();
+			const newWalls = (data.lines || []).map((l) => ({
+				id: uid(),
+				type: "wall",
+				x1: l.x1,
+				y1: l.y1,
+				x2: l.x2,
+				y2: l.y2,
+				color: DEFAULT_STYLE.wall.color,
+				width: DEFAULT_STYLE.wall.width,
+			}));
+
+			objects.push(...newWalls);
+
+			uploadStatus.textContent = `✅ ${data.lines.length} خط و ${data.stairs?.length || 0} پله`;
+			fitToScreen();
+		} else {
+			uploadStatus.textContent = "❌ " + (data.detail || "خطا");
+		}
+	} catch (err) {
+		uploadStatus.textContent = "❌ " + err.message;
+	} finally {
+		detectBtn.disabled = false;
+	}
+});
+
+// ═══════════════════════════════════════════════
+// رندر نهایی
+// ═══════════════════════════════════════════════
 const reRenderBtn = document.getElementById("reRender");
 const styleSelect = document.getElementById("styleSelect");
 const compassDirection = document.getElementById("compassDirection");
 const planTitle = document.getElementById("planTitle");
+const clearBtn = document.getElementById("clearCanvas");
 
-function showSettingsPanel() {
-	settingsPanel.style.display = "block";
-}
+styleSelect.addEventListener("change", (e) => (mapSettings.style = e.target.value));
+compassDirection.addEventListener("change", (e) => (mapSettings.compass.direction = e.target.value));
+planTitle.addEventListener("input", (e) => (mapSettings.title = e.target.value));
 
-if (styleSelect) {
-	styleSelect.addEventListener("change", (e) => {
-		mapSettings.style = e.target.value;
-		redraw();
-	});
-}
-
-if (compassDirection) {
-	compassDirection.addEventListener("change", (e) => {
-		mapSettings.compass.direction = e.target.value;
-		redraw();
-	});
-}
-
-if (planTitle) {
-	planTitle.addEventListener("input", (e) => {
-		mapSettings.title = e.target.value;
-	});
-}
-
-const layerMap = {
-	layerWalls: "walls",
-	layerRooms: "rooms",
-	layerLabels: "roomLabels",
-	layerStairs: "stairs",
-	layerDoors: "doors",
-	layerWindows: "windows",
-	layerCompass: "compass",
-	layerGrid: "grid",
+clearBtn.onclick = () => {
+	if (!confirm("همه‌چیز پاک بشه؟")) return;
+	pushHistory();
+	objects = [];
+	detectedStairs = [];
+	selectedId = null;
+	updateSelectionUI();
+	redraw();
 };
 
-Object.keys(layerMap).forEach((id) => {
-	const el = document.getElementById(id);
-	if (!el) return;
-	el.addEventListener("change", (e) => {
-		mapSettings.layers[layerMap[id]] = e.target.checked;
-		redraw();
-	});
-});
-
 reRenderBtn.addEventListener("click", async () => {
-	if (walls.length === 0 && rooms.length === 0) {
-		return alert("اول یه نقشه بکش");
-	}
+	if (objects.length === 0) return alert("اول یه چیزی بکش");
 
 	reRenderBtn.disabled = true;
-	reRenderBtn.textContent = "⏳ در حال رندر...";
+	reRenderBtn.textContent = "⏳...";
 
 	try {
+		// جدا کردن اشیاء برای بک‌اند
+		const walls = objects
+			.filter((o) => o.type === "wall")
+			.map((o) => ({
+				x1: o.x1,
+				y1: o.y1,
+				x2: o.x2,
+				y2: o.y2,
+				length: Math.hypot(o.x2 - o.x1, o.y2 - o.y1),
+				orientation: Math.abs(o.y1 - o.y2) < Math.abs(o.x1 - o.x2) ? "h" : "v",
+				color: o.color,
+				width: o.width,
+			}));
+		const doors = objects
+			.filter((o) => o.type === "door")
+			.map((o) => ({
+				x1: o.x1,
+				y1: o.y1,
+				x2: o.x2,
+				y2: o.y2,
+				color: o.color,
+			}));
+		const windows = objects
+			.filter((o) => o.type === "window")
+			.map((o) => ({
+				x1: o.x1,
+				y1: o.y1,
+				x2: o.x2,
+				y2: o.y2,
+				color: o.color,
+			}));
+		const rooms = objects
+			.filter((o) => o.type === "room")
+			.map((o) => ({
+				x: o.x,
+				y: o.y,
+				w: o.w,
+				h: o.h,
+			}));
+		const texts = objects
+			.filter((o) => o.type === "text")
+			.map((o) => ({
+				x: o.x,
+				y: o.y,
+				text: o.text,
+				color: o.color,
+				fontSize: o.fontSize,
+				bg: o.bg,
+			}));
+		const arrows = objects
+			.filter((o) => o.type === "arrow")
+			.map((o) => ({
+				x1: o.x1,
+				y1: o.y1,
+				x2: o.x2,
+				y2: o.y2,
+				color: o.color,
+				width: o.width,
+			}));
+		const rects = objects
+			.filter((o) => o.type === "rect")
+			.map((o) => ({
+				x: o.x,
+				y: o.y,
+				w: o.w,
+				h: o.h,
+				color: o.color,
+				width: o.width,
+				fill: o.fill,
+			}));
+		const circles = objects
+			.filter((o) => o.type === "circle")
+			.map((o) => ({
+				x: o.x,
+				y: o.y,
+				r: o.r,
+				color: o.color,
+				width: o.width,
+				fill: o.fill,
+			}));
+
 		const res = await fetch("/api/render", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
-				lines: walls.map((w) => ({
-					x1: w.x1,
-					y1: w.y1,
-					x2: w.x2,
-					y2: w.y2,
-					length: Math.hypot(w.x2 - w.x1, w.y2 - w.y1),
-					orientation: Math.abs(w.y1 - w.y2) < Math.abs(w.x1 - w.x2) ? "h" : "v",
-				})),
+				lines: walls,
 				stairs: detectedStairs,
-				rooms: rooms,
-				doors: doors,
-				windows: windows,
+				rooms,
+				doors,
+				windows,
+				texts,
+				arrows,
+				rects,
+				circles,
 				compass: mapSettings.compass,
-				layers: mapSettings.layers,
 				style: mapSettings.style,
 				title: mapSettings.title,
 				imageWidth: planImageWidth,
@@ -1146,18 +1317,18 @@ reRenderBtn.addEventListener("click", async () => {
 
 		const data = await res.json();
 		if (data.success) {
-			const renderedDiv = document.getElementById("renderedPlan");
-			renderedDiv.innerHTML = `
-                <h2>🎨 نقشه‌ی نهایی</h2>
-                <img src="${data.renderedUrl}" alt="نقشه" style="max-width:100%;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.1);" />
-                <div style="margin-top:12px;">
-                    <a href="${data.renderedUrl}" download="plan.png" style="display:inline-block;padding:10px 18px;background:#27ae60;color:#fff;text-decoration:none;border-radius:8px;font-weight:500;">
-                        💾 دانلود
-                    </a>
+			const panel = document.getElementById("renderedPlan");
+			panel.innerHTML = `
+                <img src="${data.renderedUrl}" alt="نقشه" />
+                <div class="actions">
+                    <a href="${data.renderedUrl}" download="plan.png">💾 دانلود</a>
+                    <button id="closeRendered">✖ بستن</button>
                 </div>
             `;
-			renderedDiv.style.display = "block";
-			renderedDiv.scrollIntoView({ behavior: "smooth" });
+			panel.style.display = "flex";
+			document.getElementById("closeRendered").onclick = () => {
+				panel.style.display = "none";
+			};
 		} else {
 			alert("خطا: " + (data.detail || "ناشناخته"));
 		}
@@ -1165,12 +1336,12 @@ reRenderBtn.addEventListener("click", async () => {
 		alert("خطای شبکه: " + err.message);
 	} finally {
 		reRenderBtn.disabled = false;
-		reRenderBtn.textContent = "🎨 رندر مجدد";
+		reRenderBtn.textContent = "🎨 رندر نهایی";
 	}
 });
 
 // ═══════════════════════════════════════════════
 // شروع
 // ═══════════════════════════════════════════════
-redraw();
-loadPlans();
+resizeCanvas();
+toolHint.textContent = toolHints.select;

@@ -3,115 +3,152 @@
 
 <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>نقشه‌ساز خانه</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Melka Editor</title>
     <link rel="stylesheet" href="/static/style.css" />
 </head>
 
 <body>
-    <header>
-        <h1>🏠 نقشه‌ساز خانه</h1>
-        <p>پلان خانه‌ات رو آپلود کن یا خودت بکش</p>
+    <header class="app-header">
+        <div class="header-left">
+            <h1>🏠 Melka Editor</h1>
+        </div>
+        <div class="header-right">
+            <button id="undoBtn" title="برگرداندن">↶</button>
+            <button id="redoBtn" title="تکرار">↷</button>
+            <button id="savePlan" class="primary">💾</button>
+        </div>
     </header>
 
-    <main>
-        <section class="card">
-            <h2>۱. آپلود عکس پلان</h2>
-            <input type="file" id="fileInput" accept="image/*" />
-            <div class="toolbar">
-                <button id="uploadBtn">📤 آپلود</button>
-                <button id="detectBtn" disabled>🤖 تشخیص خطوط با AI</button>
-                <a href="/three.html" id="threeDBtn" style="display:none;text-decoration:none;">
-                    <button type="button" style="background:#8e44ad;">🎮 نمایش سه‌بعدی</button>
-                </a>
-            </div>
-            <div id="uploadStatus"></div>
-            <div id="preview"></div>
+    <main class="app-main">
+        <!-- پنل بالا: آپلود -->
+        <section class="upload-bar">
+            <input type="file" id="fileInput" accept="image/*" hidden />
+            <label for="fileInput" class="upload-label">📤 آپلود پلان</label>
+            <button id="detectBtn" disabled>🤖 تشخیص AI</button>
+            <span id="uploadStatus"></span>
         </section>
 
-        <section class="card" id="renderedPlan" style="display:none;"></section>
+        <!-- کانتینر ادیتور -->
+        <div class="editor-container">
+            <!-- نوار ابزار سمت راست (روی موبایل پایین صفحه) -->
+            <aside class="toolbar" id="toolbar">
+                <button class="tool-btn active" data-tool="select" title="انتخاب">
+                    <span>👆</span><small>انتخاب</small>
+                </button>
+                <button class="tool-btn" data-tool="wall" title="دیوار">
+                    <span>🧱</span><small>دیوار</small>
+                </button>
+                <button class="tool-btn" data-tool="room" title="اتاق">
+                    <span>📐</span><small>اتاق</small>
+                </button>
+                <button class="tool-btn" data-tool="door" title="در">
+                    <span>🚪</span><small>در</small>
+                </button>
+                <button class="tool-btn" data-tool="window" title="پنجره">
+                    <span>🪟</span><small>پنجره</small>
+                </button>
+                <button class="tool-btn" data-tool="text" title="متن">
+                    <span>🏷️</span><small>متن</small>
+                </button>
+                <button class="tool-btn" data-tool="arrow" title="فلش">
+                    <span>➡️</span><small>فلش</small>
+                </button>
+                <button class="tool-btn" data-tool="rect" title="مستطیل">
+                    <span>⬛</span><small>مستطیل</small>
+                </button>
+                <button class="tool-btn" data-tool="circle" title="دایره">
+                    <span>⭕</span><small>دایره</small>
+                </button>
+                <button class="tool-btn" data-tool="eraser" title="پاک‌کن">
+                    <span>🧽</span><small>پاک‌کن</small>
+                </button>
+            </aside>
 
-        <section class="card">
-            <h2>۲. کشیدن نقشه</h2>
-            <div class="toolbar">
-                <button id="drawWall" class="active">🧱 دیوار</button>
-                <button id="drawRoom">📐 اتاق</button>
-                <button id="drawDoor">🚪 در</button>
-                <button id="drawWindow">🪟 پنجره</button>
-                <button id="labelRoom">🏷️ نام‌گذاری اتاق</button>
-                <button id="clearCanvas">🗑️ پاک کردن</button>
+            <!-- Canvas -->
+            <div class="canvas-wrapper" id="canvasWrapper">
+                <canvas id="canvas" width="1200" height="800"></canvas>
 
-                <!-- ⭐ دکمه‌های زوم -->
-                <div class="zoom-controls">
-                    <button id="zoomIn" title="زوم +">🔍+</button>
-                    <button id="zoomOut" title="زوم -">🔍−</button>
-                    <button id="zoomFit" title="فیت کردن">🎯</button>
-                    <button id="zoomReset" title="ریست">↺</button>
+                <!-- Input متن شناور -->
+                <input id="textInput" class="text-input" type="text" placeholder="متن را بنویسید..."
+                    style="display:none;" />
+
+                <!-- نمایشگر زوم -->
+                <div class="zoom-indicator" id="zoomIndicator">100%</div>
+
+                <!-- راهنمای ابزار -->
+                <div class="tool-hint" id="toolHint">👆 برای انتخاب روی اشیاء کلیک کن</div>
+
+                <!-- دکمه‌های زوم شناور -->
+                <div class="floating-zoom">
+                    <button id="zoomIn">+</button>
+                    <button id="zoomOut">−</button>
+                    <button id="zoomFit">🎯</button>
+                    <button id="zoomReset">↺</button>
                 </div>
             </div>
 
-            <div class="canvas-hint">
-                🖱️ چرخ ماوس = زوم &nbsp;|&nbsp; 🖱️ راست‌کلیک یا Shift+درگ = پن
-                &nbsp;|&nbsp; ⌨️ + و − و 0 و F = زوم &nbsp;|&nbsp; 📱 دو انگشت = زوم
-            </div>
+            <!-- پنل خصوصیات (روی موبایل بالای toolbar) -->
+            <aside class="properties" id="properties">
+                <div class="prop-header">
+                    <span id="selectionInfo">هیچ‌چیز انتخاب نشده</span>
+                    <button id="deleteBtn" class="danger" style="display:none;">🗑️ حذف</button>
+                </div>
 
-            <div class="canvas-wrapper">
-                <canvas id="canvas" width="800" height="500"></canvas>
-            </div>
+                <div class="prop-body">
+                    <label class="prop-row">
+                        <span>رنگ</span>
+                        <input type="color" id="propColor" value="#2c3e50" />
+                    </label>
+                    <label class="prop-row">
+                        <span>ضخامت</span>
+                        <input type="range" id="propWidth" min="1" max="12" value="3" />
+                    </label>
+                    <label class="prop-row" id="fillRow">
+                        <span>پرکردن</span>
+                        <input type="color" id="propFill" value="#ffffff" />
+                    </label>
+                    <label class="prop-row" id="fontRow">
+                        <span>اندازه فونت</span>
+                        <input type="range" id="propFontSize" min="10" max="60" value="18" />
+                    </label>
+                </div>
+            </aside>
+        </div>
 
-            <div class="actions">
-                <button id="savePlan">💾 ذخیره نقشه</button>
-                <button id="reRender">🎨 رندر مجدد</button>
-                <span id="roomCount">تعداد اتاق: 0</span>
-            </div>
-        </section>
-
-        <section class="card" id="settingsPanel" style="display:none;">
-            <h2>۳. تنظیمات نقشه</h2>
-
-            <div class="settings-grid">
+        <!-- پنل تنظیمات نقشه (پایین، همیشه باز) -->
+        <section class="settings-bar" id="settingsPanel">
+            <div class="settings-row">
                 <label>
                     🎨 استایل:
                     <select id="styleSelect">
-                        <option value="modern">مدرن (رنگ‌بندی)</option>
-                        <option value="blueprint">نقشه‌ی کلاسیک (آبی)</option>
-                        <option value="minimal">مینیمال (سیاه و سفید)</option>
+                        <option value="modern">مدرن</option>
+                        <option value="blueprint">کلاسیک آبی</option>
+                        <option value="minimal">مینیمال</option>
                     </select>
                 </label>
-
                 <label>
-                    🧭 جهت شمال:
+                    🧭 جهت:
                     <select id="compassDirection">
-                        <option value="north">شمال (N)</option>
-                        <option value="south">جنوب (S)</option>
-                        <option value="east">شرق (E)</option>
-                        <option value="west">غرب (W)</option>
+                        <option value="north">شمال</option>
+                        <option value="south">جنوب</option>
+                        <option value="east">شرق</option>
+                        <option value="west">غرب</option>
                     </select>
                 </label>
-
                 <label>
-                    📝 عنوان نقشه:
-                    <input type="text" id="planTitle" placeholder="مثلاً: آپارتمان ۱۲۰ متری">
+                    📝 عنوان:
+                    <input type="text" id="planTitle" placeholder="عنوان نقشه">
                 </label>
             </div>
-
-            <h3 style="margin-top:16px;">لایه‌ها</h3>
-            <div class="layers-grid">
-                <label><input type="checkbox" id="layerWalls" checked> 🧱 دیوارها</label>
-                <label><input type="checkbox" id="layerRooms" checked> 🎨 اتاق‌ها</label>
-                <label><input type="checkbox" id="layerLabels" checked> 🏷️ نام اتاق‌ها</label>
-                <label><input type="checkbox" id="layerStairs" checked> 🪜 پله‌ها</label>
-                <label><input type="checkbox" id="layerDoors" checked> 🚪 درها</label>
-                <label><input type="checkbox" id="layerWindows" checked> 🪟 پنجره‌ها</label>
-                <label><input type="checkbox" id="layerCompass" checked> 🧭 قطب‌نما</label>
-                <label><input type="checkbox" id="layerGrid"> ▦ گرید</label>
+            <div class="settings-row">
+                <button id="reRender" class="primary">🎨 رندر نهایی</button>
+                <button id="clearCanvas" class="danger">🗑️ پاک کردن همه</button>
             </div>
         </section>
 
-        <section class="card">
-            <h2>۴. نقشه‌های ذخیره‌شده</h2>
-            <div id="plansList">هنوز نقشه‌ای ذخیره نشده</div>
-        </section>
+        <!-- نمایشگر رندر نهایی -->
+        <section class="rendered-panel" id="renderedPlan" style="display:none;"></section>
     </main>
 
     <script src="/static/script.js"></script>

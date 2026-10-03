@@ -3,12 +3,11 @@
 import os
 import time
 import json
-import shutil
 from pathlib import Path
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -22,7 +21,10 @@ from app.filters.stair_filter import filter_stair_lines
 from app.render.renderer import render_plan
 
 
-app = FastAPI(title="Melka - نقشه‌ساز خانه")
+# ═══════════════════════════════════════════════
+# اپ اصلی
+# ═══════════════════════════════════════════════
+app = FastAPI(title="Melka Editor")
 
 app.add_middleware(
     CORSMiddleware,
@@ -33,25 +35,10 @@ app.add_middleware(
 
 
 # ═══════════════════════════════════════════════
-# Pydantic models
+# Pydantic Models
 # ═══════════════════════════════════════════════
 class DetectRequest(BaseModel):
     filename: str
-
-
-class SavePlanRequest(BaseModel):
-    walls: list = []
-    rooms: list = []
-    stairs: list = []
-    lines: list = []
-    imageWidth: int = 1000
-    imageHeight: int = 700
-    doors: list = []
-    windows: list = []
-    compass: dict = None
-    layers: dict = None
-    style: str = "modern"
-    title: str = ""
 
 
 class ReRenderRequest(BaseModel):
@@ -60,12 +47,26 @@ class ReRenderRequest(BaseModel):
     rooms: list = []
     doors: list = []
     windows: list = []
+    texts: list = []
+    arrows: list = []
+    rects: list = []
+    circles: list = []
     compass: dict = None
     layers: dict = None
     style: str = "modern"
     title: str = ""
     imageWidth: int = 1000
     imageHeight: int = 700
+
+
+class SavePlanRequest(BaseModel):
+    objects: list = []
+    stairs: list = []
+    imageWidth: int = 1000
+    imageHeight: int = 700
+    style: str = "modern"
+    title: str = ""
+    compass: dict = None
 
 
 # ═══════════════════════════════════════════════
@@ -95,7 +96,6 @@ def save_plans(plans: list):
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 app.mount("/renders", StaticFiles(directory=str(RENDER_DIR)), name="renders")
-app.mount("/three", StaticFiles(directory=str(STATIC_DIR / "three")), name="three")
 
 
 # ═══════════════════════════════════════════════
@@ -104,11 +104,6 @@ app.mount("/three", StaticFiles(directory=str(STATIC_DIR / "three")), name="thre
 @app.get("/")
 def root():
     return FileResponse(str(STATIC_DIR / "index.html"))
-
-
-@app.get("/three.html")
-def three_page():
-    return FileResponse(str(STATIC_DIR / "three.html"))
 
 
 # ═══════════════════════════════════════════════
@@ -156,77 +151,34 @@ async def upload_floor_plan(floorPlan: UploadFile = File(...)):
 
 
 # ═══════════════════════════════════════════════
-# API: تشخیص خطوط + پله + رندر
+# API: تشخیص خطوط + پله
 # ═══════════════════════════════════════════════
 @app.post("/api/detect-lines")
 async def detect_lines_api(request: Request):
     try:
-        content_type = request.headers.get("content-type", "")
+        body = await request.json()
+        fn = body.get("filename")
 
-        image_path = None
+        if not fn:
+            raise HTTPException(400, "عکسی ارسال نشد")
 
-        if "multipart/form-data" in content_type:
-            form = await request.form()
-            file = form.get("floorPlan")
-            if file and hasattr(file, "filename"):
-                ext = os.path.splitext(file.filename)[1].lower()
-                timestamp = int(time.time() * 1000)
-                unique_name = f"{timestamp}-{os.urandom(4).hex()}{ext}"
-                image_path = UPLOAD_DIR / unique_name
-                content = await file.read()
-                with open(image_path, "wb") as f:
-                    f.write(content)
-            else:
-                body = await request.json()
-                fn = body.get("filename")
-                if fn:
-                    image_path = UPLOAD_DIR / fn
+        # جلوگیری از path traversal
+        safe_name = Path(fn).name
+        if not safe_name or safe_name != fn:
+            raise HTTPException(400, "نام فایل نامعتبر")
 
-        else:
-            body = await request.json()
-            fn = body.get("filename")
-            if not fn:
-                raise HTTPException(400, "عکسی ارسال نشد")
-            image_path = UPLOAD_DIR / fn
-
-        if image_path is None or not Path(image_path).exists():
+        image_path = UPLOAD_DIR / safe_name
+        if not image_path.exists():
             raise HTTPException(404, "عکس پیدا نشد")
 
         start = time.time()
         lines, img_w, img_h = detect_lines(str(image_path))
-
         stairs = detect_stairs(lines)
-
         wall_lines = filter_stair_lines(lines, stairs, tol=6)
-
         elapsed = int((time.time() - start) * 1000)
 
         print(f"✅ تشخیص: {len(lines)} خط کل، {len(stairs)} پله، "
               f"{len(wall_lines)} خط دیوار، {elapsed}ms")
-
-        rendered_url = None
-        try:
-            rendered_path = render_plan(
-                lines=wall_lines,
-                stairs=stairs,
-                image_width=img_w,
-                image_height=img_h,
-            )
-
-            timestamp = int(time.time() * 1000)
-            render_name = f"plan-{timestamp}.png"
-            dest_render = RENDER_DIR / render_name
-
-            if isinstance(rendered_path, str):
-                shutil.copyfile(rendered_path, dest_render)
-            else:
-                rendered_path.save(dest_render, "PNG", optimize=True)
-
-            rendered_url = f"/renders/{render_name}"
-        except Exception as render_err:
-            import traceback
-            traceback.print_exc()
-            print(f"⚠️ خطا در رندر: {render_err}")
 
         return {
             "success": True,
@@ -236,7 +188,6 @@ async def detect_lines_api(request: Request):
             "imageHeight": img_h,
             "lines": wall_lines,
             "stairs": stairs,
-            "renderedUrl": rendered_url,
         }
 
     except HTTPException:
@@ -248,7 +199,7 @@ async def detect_lines_api(request: Request):
 
 
 # ═══════════════════════════════════════════════
-# API: رندر مجدد با تنظیمات جدید
+# API: رندر نهایی
 # ═══════════════════════════════════════════════
 @app.post("/api/render")
 def re_render(req: ReRenderRequest):
@@ -259,6 +210,10 @@ def re_render(req: ReRenderRequest):
             rooms=req.rooms,
             doors=req.doors,
             windows=req.windows,
+            texts=req.texts,
+            arrows=req.arrows,
+            rects=req.rects,
+            circles=req.circles,
             compass=req.compass,
             layers=req.layers,
             style=req.style,
@@ -290,18 +245,13 @@ def create_plan(req: SavePlanRequest):
     plans = load_plans()
     new_plan = {
         "id": int(time.time() * 1000),
-        "walls": req.walls,
-        "rooms": req.rooms,
+        "objects": req.objects,
         "stairs": req.stairs,
-        "lines": req.lines,
         "imageWidth": req.imageWidth,
         "imageHeight": req.imageHeight,
-        "doors": req.doors,
-        "windows": req.windows,
-        "compass": req.compass,
-        "layers": req.layers,
         "style": req.style,
         "title": req.title,
+        "compass": req.compass,
         "createdAt": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
     plans.append(new_plan)
@@ -319,5 +269,5 @@ def list_plans():
 # ═══════════════════════════════════════════════
 if __name__ == "__main__":
     import uvicorn
-    print(f"🚀 Melka در حال اجرا روی http://localhost:{PORT}")
+    print(f"🚀 Melka Editor در حال اجرا روی http://localhost:{PORT}")
     uvicorn.run("app.main:app", host=HOST, port=PORT, reload=False)
