@@ -214,6 +214,7 @@ async def detect_lines_api(request: Request):
 @app.post("/api/render")
 def re_render(req: ReRenderRequest):
     try:
+        # ⭐ خروجی رندر دقیقاً هم اندازه‌ی نقشه‌ی اصلی
         img = render_plan(
             lines=req.lines,
             stairs=req.stairs,
@@ -230,6 +231,8 @@ def re_render(req: ReRenderRequest):
             title=req.title,
             image_width=req.imageWidth,
             image_height=req.imageHeight,
+            output_width=req.imageWidth,      # ⭐ همون عرض
+            output_height=req.imageHeight,    # ⭐ همون ارتفاع
         )
 
         timestamp = int(time.time() * 1000)

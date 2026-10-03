@@ -24,11 +24,11 @@ const fillRow = document.getElementById("fillRow");
 // ═══════════════════════════════════════════════
 // State
 // ═══════════════════════════════════════════════
-let objects = []; // همه‌ی شیءها
-let selectedId = null; // شیء انتخاب‌شده
-let currentTool = "select"; // ابزار فعال
-let history = []; // برای Undo
-let redoStack = []; // برای Redo
+let objects = [];
+let selectedId = null;
+let currentTool = "select";
+let history = [];
+let redoStack = [];
 let isDrawing = false;
 let startPoint = null;
 let currentPoint = null;
@@ -37,24 +37,31 @@ let dragOffset = { x: 0, y: 0 };
 let isPanning = false;
 let panStart = { x: 0, y: 0, ox: 0, oy: 0 };
 
-// viewport
 let view = { scale: 1, offsetX: 0, offsetY: 0 };
 
-// ابعاد اصلی عکس AI
+// ⭐ ابعاد اصلی عکس (ثابت)
 let planImageWidth = 1000;
 let planImageHeight = 700;
 
-// نقشه‌ی AI
 let detectedStairs = [];
-let baseWalls = []; // خطوط دیوار از AI (فقط برای فیت کردن)
 
 let mapSettings = {
 	style: "modern",
-	compass: { x: 700, y: 420, size: 40, direction: "north" },
+	// ⭐ مختصات قطب‌نما توی گوشه‌ی پایین-راست (خودکار محاسبه می‌شه)
+	compass: { x: 0, y: 0, size: 40, direction: "north" },
 	title: "",
 };
 
-// رنگ‌های پیش‌فرض
+// ⭐ به‌روزرسانی مختصات قطب‌نما بر اساس ابعاد نقشه (گوشه‌ی پایین-راست)
+function updateCompassPosition() {
+	const margin = 80;
+	mapSettings.compass.x = planImageWidth - margin;
+	mapSettings.compass.y = planImageHeight - margin;
+}
+
+// محاسبه‌ی اولیه
+updateCompassPosition();
+
 const DEFAULT_STYLE = {
 	wall: { color: "#2c3e50", width: 4 },
 	door: { color: "#8B4513", width: 3 },
@@ -66,9 +73,6 @@ const DEFAULT_STYLE = {
 	room: { color: "#3498db", width: 2 },
 };
 
-// ═══════════════════════════════════════════════
-// Helper: تولید ID
-// ═══════════════════════════════════════════════
 function uid() {
 	return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 }
@@ -113,7 +117,6 @@ function redo() {
 undoBtn.onclick = undo;
 redoBtn.onclick = redo;
 
-// تاریخچه‌ی اولیه
 history.push(JSON.stringify(objects));
 
 // ═══════════════════════════════════════════════
@@ -136,10 +139,7 @@ document.querySelectorAll(".tool-btn").forEach((btn) => {
 	btn.addEventListener("click", () => {
 		const tool = btn.dataset.tool;
 
-		// اگه ابزار text بود و یه input باز بود، ببندش
-		if (textInput.style.display !== "none") {
-			commitTextInput();
-		}
+		if (textInput.style.display !== "none") commitTextInput();
 
 		document.querySelectorAll(".tool-btn").forEach((b) => b.classList.remove("active"));
 		btn.classList.add("active");
@@ -152,7 +152,7 @@ document.querySelectorAll(".tool-btn").forEach((btn) => {
 });
 
 // ═══════════════════════════════════════════════
-// تبدیل مختصات
+// مختصات
 // ═══════════════════════════════════════════════
 function screenToWorld(clientX, clientY) {
 	const rect = wrapper.getBoundingClientRect();
@@ -165,18 +165,13 @@ function screenToWorld(clientX, clientY) {
 }
 
 function worldToScreen(wx, wy) {
-	const rect = wrapper.getBoundingClientRect();
 	return {
 		x: wx * view.scale + view.offsetX,
 		y: wy * view.scale + view.offsetY,
 	};
 }
 
-// ═══════════════════════════════════════════════
-// فیت کردن نقشه (بعد از AI)
-// ═══════════════════════════════════════════════
 function fitToScreen() {
-	// مرزهای همه‌ی اشیاء
 	let minX = Infinity,
 		minY = Infinity,
 		maxX = -Infinity,
@@ -243,7 +238,7 @@ function zoomAt(screenX, screenY, factor) {
 }
 
 // ═══════════════════════════════════════════════
-// Resize canvas
+// Resize
 // ═══════════════════════════════════════════════
 function resizeCanvas() {
 	const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -278,18 +273,13 @@ function redraw() {
 	ctx.translate(view.offsetX, view.offsetY);
 	ctx.scale(view.scale, view.scale);
 
-	// پله‌های AI (قبل از همه)
 	drawStairsAI(detectedStairs);
-
-	// همه‌ی اشیاء
 	objects.forEach((o) => drawObject(o));
 
-	// پیش‌نمایش رسم
 	if (isDrawing && startPoint && currentPoint) {
 		drawPreview();
 	}
 
-	// انتخاب
 	if (selectedId) {
 		const sel = objects.find((o) => o.id === selectedId);
 		if (sel) drawSelectionIndicator(sel);
@@ -297,8 +287,59 @@ function redraw() {
 
 	ctx.restore();
 
-	// نمایشگر زوم
+	// ⭐ قطب‌نما روی لایه‌ی ثابت (بعد از ctx.restore)
+	drawCompassOnCanvas();
+
 	zoomIndicator.textContent = `${Math.round(view.scale * 100)}%`;
+}
+
+function drawCompassOnCanvas() {
+	const c = mapSettings.compass;
+	const size = c.size;
+
+	// ⭐ تبدیل مختصات دنیا (نقشه) به مختصات صفحه
+	const screenPos = worldToScreen(c.x, c.y);
+	const cx = screenPos.x;
+	const cy = screenPos.y;
+
+	// اگه بیرون از canvas بود، رسم نکن
+	if (cx < -100 || cy < -100 || cx > wrapper.clientWidth + 100 || cy > wrapper.clientHeight + 100) {
+		return;
+	}
+
+	ctx.save();
+
+	ctx.strokeStyle = "#2c3e50";
+	ctx.lineWidth = 2;
+	ctx.beginPath();
+	ctx.arc(cx, cy, size, 0, Math.PI * 2);
+	ctx.stroke();
+
+	const dirs = {
+		north: -Math.PI / 2,
+		south: Math.PI / 2,
+		east: 0,
+		west: Math.PI,
+	};
+	const baseAngle = dirs[c.direction] ?? -Math.PI / 2;
+	const tipX = cx + Math.cos(baseAngle) * (size - 8);
+	const tipY = cy + Math.sin(baseAngle) * (size - 8);
+
+	ctx.fillStyle = "#E74C3C";
+	ctx.beginPath();
+	ctx.moveTo(tipX, tipY);
+	ctx.lineTo(cx + Math.cos(baseAngle - 0.4) * (size - 14), cy + Math.sin(baseAngle - 0.4) * (size - 14));
+	ctx.lineTo(cx + Math.cos(baseAngle + 0.4) * (size - 14), cy + Math.sin(baseAngle + 0.4) * (size - 14));
+	ctx.closePath();
+	ctx.fill();
+
+	ctx.fillStyle = "#2c3e50";
+	ctx.font = `bold ${Math.floor(size * 0.6)}px Tahoma`;
+	ctx.textAlign = "center";
+	ctx.textBaseline = "middle";
+	ctx.fillText("N", cx, cy - size - 12);
+
+	ctx.restore();
 }
 
 function drawPreview() {
@@ -446,13 +487,11 @@ function drawArrow(o) {
 	ctx.lineWidth = (o.width || DEFAULT_STYLE.arrow.width) / view.scale;
 	ctx.lineCap = "round";
 
-	// خط
 	ctx.beginPath();
 	ctx.moveTo(o.x1, o.y1);
 	ctx.lineTo(o.x2, o.y2);
 	ctx.stroke();
 
-	// سر فلش
 	const ax = o.x2 - Math.cos(angle) * headLen;
 	const ay = o.y2 - Math.sin(angle) * headLen;
 	const perp = angle + Math.PI / 2;
@@ -476,7 +515,6 @@ function drawText(o) {
 	const tw = metrics.width;
 	const th = fontSize * 1.2;
 
-	// پس‌زمینه
 	if (o.bg && o.bg !== "transparent") {
 		ctx.fillStyle = o.bg;
 		const pad = 6;
@@ -577,10 +615,9 @@ function getObjectBounds(o) {
 }
 
 // ═══════════════════════════════════════════════
-// برخورد (Hit test)
+// Hit test
 // ═══════════════════════════════════════════════
 function hitTest(pt) {
-	// از آخر به اول (آخرین شیء بالاتره)
 	for (let i = objects.length - 1; i >= 0; i--) {
 		const o = objects[i];
 		if (isPointInObject(pt, o)) return o;
@@ -619,24 +656,20 @@ function pointToSegmentDist(px, py, x1, y1, x2, y2) {
 }
 
 // ═══════════════════════════════════════════════
-// رویدادهای Pointer (پشتیبانی کامل موبایل + دسکتاپ)
+// Pointer events
 // ═══════════════════════════════════════════════
-let pointers = new Map(); // برای multipointer
+let pointers = new Map();
 let pinchStart = null;
 
 canvas.addEventListener("pointerdown", (e) => {
 	canvas.setPointerCapture(e.pointerId);
 	pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-	// دو انگشت → زوم/پن
 	if (pointers.size === 2) {
 		isDrawing = false;
 		const pts = Array.from(pointers.values());
 		const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-		const mid = {
-			x: (pts[0].x + pts[1].x) / 2,
-			y: (pts[0].y + pts[1].y) / 2,
-		};
+		const mid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
 		const rect = wrapper.getBoundingClientRect();
 		pinchStart = {
 			dist,
@@ -648,15 +681,9 @@ canvas.addEventListener("pointerdown", (e) => {
 		return;
 	}
 
-	// راست‌کلیک یا shift → پن
 	if (e.button === 2 || e.shiftKey) {
 		isPanning = true;
-		panStart = {
-			x: e.clientX,
-			y: e.clientY,
-			ox: view.offsetX,
-			oy: view.offsetY,
-		};
+		panStart = { x: e.clientX, y: e.clientY, ox: view.offsetX, oy: view.offsetY };
 		canvas.style.cursor = "grabbing";
 		return;
 	}
@@ -690,12 +717,10 @@ canvas.addEventListener("pointerdown", (e) => {
 	}
 
 	if (currentTool === "text") {
-		// نمایش input شناور
 		showTextInput(e.clientX, e.clientY);
 		return;
 	}
 
-	// بقیه ابزارها → شروع رسم
 	isDrawing = true;
 	startPoint = pt;
 	currentPoint = pt;
@@ -706,14 +731,10 @@ canvas.addEventListener("pointermove", (e) => {
 		pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 	}
 
-	// دو انگشت → زوم/پن
 	if (pointers.size === 2 && pinchStart) {
 		const pts = Array.from(pointers.values());
 		const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-		const mid = {
-			x: (pts[0].x + pts[1].x) / 2,
-			y: (pts[0].y + pts[1].y) / 2,
-		};
+		const mid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
 		const rect = wrapper.getBoundingClientRect();
 		const midLocal = { x: mid.x - rect.left, y: mid.y - rect.top };
 
@@ -727,7 +748,6 @@ canvas.addEventListener("pointermove", (e) => {
 		return;
 	}
 
-	// پن
 	if (isPanning) {
 		const dx = e.clientX - panStart.x;
 		const dy = e.clientY - panStart.y;
@@ -737,7 +757,6 @@ canvas.addEventListener("pointermove", (e) => {
 		return;
 	}
 
-	// درگ کردن شیء انتخاب‌شده
 	if (draggingObject) {
 		const pt = screenToWorld(e.clientX, e.clientY);
 		const dx = pt.x - dragOffset.x;
@@ -748,7 +767,6 @@ canvas.addEventListener("pointermove", (e) => {
 		return;
 	}
 
-	// رسم
 	if (isDrawing) {
 		currentPoint = screenToWorld(e.clientX, e.clientY);
 		redraw();
@@ -851,9 +869,6 @@ function createObject(tool, s, c) {
 	}
 }
 
-// ═══════════════════════════════════════════════
-// جابجایی شیء
-// ═══════════════════════════════════════════════
 function moveObject(o, dx, dy) {
 	if (o.type === "wall" || o.type === "door" || o.type === "window" || o.type === "arrow") {
 		o.x1 += dx;
@@ -870,7 +885,7 @@ function moveObject(o, dx, dy) {
 }
 
 // ═══════════════════════════════════════════════
-// Input متن شناور
+// Text input
 // ═══════════════════════════════════════════════
 let pendingTextPos = null;
 
@@ -935,7 +950,7 @@ textInput.addEventListener("blur", () => {
 });
 
 // ═══════════════════════════════════════════════
-// پنل خصوصیات
+// Properties
 // ═══════════════════════════════════════════════
 function updateSelectionUI() {
 	if (!selectedId) {
@@ -950,10 +965,8 @@ function updateSelectionUI() {
 	selectionInfo.textContent = `انتخاب: ${objectTypeName(o.type)}`;
 	deleteBtn.style.display = "block";
 
-	// رنگ
 	if (o.color) propColor.value = o.color;
 
-	// ضخامت
 	if (o.width !== undefined) {
 		propWidth.value = o.width;
 		propWidth.parentElement.style.display = "flex";
@@ -961,7 +974,6 @@ function updateSelectionUI() {
 		propWidth.parentElement.style.display = "none";
 	}
 
-	// فونت
 	if (o.type === "text") {
 		fontRow.style.display = "flex";
 		propFontSize.value = o.fontSize || 20;
@@ -969,7 +981,6 @@ function updateSelectionUI() {
 		fontRow.style.display = "none";
 	}
 
-	// پرکردن
 	if (o.type === "rect" || o.type === "circle") {
 		fillRow.style.display = "flex";
 		propFill.value = o.fill && o.fill !== "transparent" ? o.fill : "#ffffff";
@@ -1054,7 +1065,6 @@ propFontSize.addEventListener("change", () => {
 	if (selectedId) pushHistory();
 });
 
-// دوبار کلیک روی متن → ویرایش
 canvas.addEventListener("dblclick", (e) => {
 	const pt = screenToWorld(e.clientX, e.clientY);
 	const hit = hitTest(pt);
@@ -1069,7 +1079,7 @@ canvas.addEventListener("dblclick", (e) => {
 });
 
 // ═══════════════════════════════════════════════
-// دکمه‌های زوم
+// Zoom buttons
 // ═══════════════════════════════════════════════
 document.getElementById("zoomIn").onclick = () => {
 	const cx = wrapper.clientWidth / 2;
@@ -1085,7 +1095,7 @@ document.getElementById("zoomFit").onclick = () => fitToScreen();
 document.getElementById("zoomReset").onclick = () => resetView();
 
 // ═══════════════════════════════════════════════
-// کیبورد
+// Keyboard
 // ═══════════════════════════════════════════════
 document.addEventListener("keydown", (e) => {
 	if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
@@ -1107,7 +1117,7 @@ document.addEventListener("keydown", (e) => {
 });
 
 // ═══════════════════════════════════════════════
-// آپلود و تشخیص AI
+// Upload & Detect
 // ═══════════════════════════════════════════════
 const fileInput = document.getElementById("fileInput");
 const detectBtn = document.getElementById("detectBtn");
@@ -1141,22 +1151,26 @@ fileInput.addEventListener("change", async (e) => {
 detectBtn.addEventListener("click", async () => {
 	if (!uploadedFilename) return;
 	detectBtn.disabled = true;
-	uploadStatus.textContent = "🤖 در حال تشخیص...";
+	uploadStatus.textContent = "🤖 در حال تشخیص (دو-مرحله‌ای)...";
 
 	try {
 		const res = await fetch("/api/detect-lines", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ filename: uploadedFilename }),
+			body: JSON.stringify({ filename: uploadedFilename, twoPass: true }),
 		});
 		const data = await res.json();
 
 		if (data.success) {
+			// ⭐ ذخیره‌ی ابعاد اصلی
 			planImageWidth = data.imageWidth || 1000;
 			planImageHeight = data.imageHeight || 700;
+
+			// ⭐ قطب‌نما رو ببر گوشه‌ی پایین-راست
+			updateCompassPosition();
+
 			detectedStairs = data.stairs || [];
 
-			// اضافه کردن دیوارها به عنوان شیء
 			pushHistory();
 			const newWalls = (data.lines || []).map((l) => ({
 				id: uid(),
@@ -1184,7 +1198,7 @@ detectBtn.addEventListener("click", async () => {
 });
 
 // ═══════════════════════════════════════════════
-// رندر نهایی
+// Render نهایی
 // ═══════════════════════════════════════════════
 const reRenderBtn = document.getElementById("reRender");
 const styleSelect = document.getElementById("styleSelect");
@@ -1192,8 +1206,16 @@ const compassDirection = document.getElementById("compassDirection");
 const planTitle = document.getElementById("planTitle");
 const clearBtn = document.getElementById("clearCanvas");
 
-styleSelect.addEventListener("change", (e) => (mapSettings.style = e.target.value));
-compassDirection.addEventListener("change", (e) => (mapSettings.compass.direction = e.target.value));
+styleSelect.addEventListener("change", (e) => {
+	mapSettings.style = e.target.value;
+	redraw();
+});
+
+compassDirection.addEventListener("change", (e) => {
+	mapSettings.compass.direction = e.target.value;
+	redraw();
+});
+
 planTitle.addEventListener("input", (e) => (mapSettings.title = e.target.value));
 
 clearBtn.onclick = () => {
@@ -1213,7 +1235,9 @@ reRenderBtn.addEventListener("click", async () => {
 	reRenderBtn.textContent = "⏳...";
 
 	try {
-		// جدا کردن اشیاء برای بک‌اند
+		// ⭐ مطمئن شو قطب‌نما توی گوشه‌ست
+		updateCompassPosition();
+
 		const walls = objects
 			.filter((o) => o.type === "wall")
 			.map((o) => ({
