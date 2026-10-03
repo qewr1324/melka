@@ -10,146 +10,112 @@
 
 <body>
     <header class="app-header">
-        <div class="header-left">
-            <h1>🏠 Melka Editor</h1>
+        <div class="header-title">
+            <span class="logo">🏠</span>
+            <span class="title">Melka</span>
         </div>
-        <div class="header-right">
+        <div class="header-actions">
             <button id="undoBtn" title="برگرداندن">↶</button>
             <button id="redoBtn" title="تکرار">↷</button>
-            <button id="savePlan" class="primary">💾</button>
         </div>
     </header>
 
     <main class="app-main">
-        <!-- پنل بالا: آپلود -->
         <section class="upload-bar">
             <input type="file" id="fileInput" accept="image/*" hidden />
-            <label for="fileInput" class="upload-label">📤 آپلود پلان</label>
-            <button id="detectBtn" disabled>🤖 تشخیص AI</button>
+            <label for="fileInput" class="upload-label">
+                <span>📤</span> آپلود پلان
+            </label>
+            <button id="detectBtn" disabled>
+                <span>🤖</span> تشخیص
+            </button>
             <span id="uploadStatus"></span>
         </section>
 
-        <!-- کانتینر ادیتور -->
-        <div class="editor-container">
-            <!-- نوار ابزار سمت راست (روی موبایل پایین صفحه) -->
-            <aside class="toolbar" id="toolbar">
-                <button class="tool-btn active" data-tool="select" title="انتخاب">
-                    <span>👆</span><small>انتخاب</small>
-                </button>
-                <button class="tool-btn" data-tool="wall" title="دیوار">
-                    <span>🧱</span><small>دیوار</small>
-                </button>
-                <button class="tool-btn" data-tool="room" title="اتاق">
-                    <span>📐</span><small>اتاق</small>
-                </button>
-                <button class="tool-btn" data-tool="door" title="در">
-                    <span>🚪</span><small>در</small>
-                </button>
-                <button class="tool-btn" data-tool="window" title="پنجره">
-                    <span>🪟</span><small>پنجره</small>
-                </button>
-                <button class="tool-btn" data-tool="text" title="متن">
-                    <span>🏷️</span><small>متن</small>
-                </button>
-                <button class="tool-btn" data-tool="arrow" title="فلش">
-                    <span>➡️</span><small>فلش</small>
-                </button>
-                <button class="tool-btn" data-tool="rect" title="مستطیل">
-                    <span>⬛</span><small>مستطیل</small>
-                </button>
-                <button class="tool-btn" data-tool="circle" title="دایره">
-                    <span>⭕</span><small>دایره</small>
-                </button>
-                <button class="tool-btn" data-tool="eraser" title="پاک‌کن">
-                    <span>🧽</span><small>پاک‌کن</small>
-                </button>
-            </aside>
+        <div class="canvas-wrapper" id="canvasWrapper">
+            <canvas id="canvas"></canvas>
 
-            <!-- Canvas -->
-            <div class="canvas-wrapper" id="canvasWrapper">
-                <canvas id="canvas" width="1200" height="800"></canvas>
+            <!-- ⭐ input نامرئی برای گرفتن کیبورد -->
+            <input id="textInput" class="text-input" type="text" autocomplete="off" autocorrect="off"
+                autocapitalize="off" spellcheck="false" />
 
-                <!-- Input متن شناور -->
-                <input id="textInput" class="text-input" type="text" placeholder="متن را بنویسید..."
-                    style="display:none;" />
+            <div class="zoom-indicator" id="zoomIndicator">100%</div>
 
-                <!-- نمایشگر زوم -->
-                <div class="zoom-indicator" id="zoomIndicator">100%</div>
+            <div class="tool-hint" id="toolHint">👆 روی متن بزن تا انتخاب بشه</div>
 
-                <!-- راهنمای ابزار -->
-                <div class="tool-hint" id="toolHint">👆 برای انتخاب روی اشیاء کلیک کن</div>
-
-                <!-- دکمه‌های زوم شناور -->
-                <div class="floating-zoom">
-                    <button id="zoomIn">+</button>
-                    <button id="zoomOut">−</button>
-                    <button id="zoomFit">🎯</button>
-                    <button id="zoomReset">↺</button>
-                </div>
+            <div class="floating-zoom">
+                <button id="zoomIn">+</button>
+                <button id="zoomOut">−</button>
+                <button id="zoomFit">🎯</button>
             </div>
-
-            <!-- پنل خصوصیات (روی موبایل بالای toolbar) -->
-            <aside class="properties" id="properties">
-                <div class="prop-header">
-                    <span id="selectionInfo">هیچ‌چیز انتخاب نشده</span>
-                    <button id="deleteBtn" class="danger" style="display:none;">🗑️ حذف</button>
-                </div>
-
-                <div class="prop-body">
-                    <label class="prop-row">
-                        <span>رنگ</span>
-                        <input type="color" id="propColor" value="#2c3e50" />
-                    </label>
-                    <label class="prop-row">
-                        <span>ضخامت</span>
-                        <input type="range" id="propWidth" min="1" max="12" value="3" />
-                    </label>
-                    <label class="prop-row" id="fillRow">
-                        <span>پرکردن</span>
-                        <input type="color" id="propFill" value="#ffffff" />
-                    </label>
-                    <label class="prop-row" id="fontRow">
-                        <span>اندازه فونت</span>
-                        <input type="range" id="propFontSize" min="10" max="60" value="18" />
-                    </label>
-                </div>
-            </aside>
         </div>
 
-        <!-- پنل تنظیمات نقشه (پایین، همیشه باز) -->
-        <section class="settings-bar" id="settingsPanel">
-            <div class="settings-row">
-                <label>
-                    🎨 استایل:
-                    <select id="styleSelect">
-                        <option value="modern">مدرن</option>
-                        <option value="blueprint">کلاسیک آبی</option>
-                        <option value="minimal">مینیمال</option>
-                    </select>
-                </label>
-                <label>
-                    🧭 جهت:
-                    <select id="compassDirection">
-                        <option value="north">شمال</option>
-                        <option value="south">جنوب</option>
-                        <option value="east">شرق</option>
-                        <option value="west">غرب</option>
-                    </select>
-                </label>
-                <label>
-                    📝 عنوان:
-                    <input type="text" id="planTitle" placeholder="عنوان نقشه">
-                </label>
-            </div>
-            <div class="settings-row">
-                <button id="reRender" class="primary">🎨 رندر نهایی</button>
-                <button id="clearCanvas" class="danger">🗑️ پاک کردن همه</button>
-            </div>
-        </section>
+        <nav class="bottom-toolbar">
+            <button class="tool-btn active" data-tool="select">
+                <span>👆</span>
+                <small>انتخاب</small>
+            </button>
+            <button class="tool-btn" data-tool="text">
+                <span>🏷️</span>
+                <small>متن</small>
+            </button>
+            <button class="tool-btn" data-tool="eraser">
+                <span>🗑️</span>
+                <small>حذف</small>
+            </button>
+        </nav>
 
-        <!-- نمایشگر رندر نهایی -->
-        <section class="rendered-panel" id="renderedPlan" style="display:none;"></section>
+        <div class="prop-sheet" id="propSheet">
+            <div class="sheet-handle"></div>
+            <div class="sheet-header">
+                <span id="selectionInfo">هیچ‌چیز انتخاب نشده</span>
+                <button id="closePropSheet" class="close-btn">✖</button>
+            </div>
+            <div class="sheet-body">
+                <div class="prop-row" id="widthRow">
+                    <div class="prop-label">
+                        <span>ضخامت</span>
+                        <span class="prop-value" id="widthValue">3</span>
+                    </div>
+                    <input type="range" id="propWidth" min="1" max="15" value="3" step="1" />
+                </div>
+
+                <div class="prop-row" id="fontRow">
+                    <div class="prop-label">
+                        <span>اندازه متن</span>
+                        <span class="prop-value" id="fontValue">24</span>
+                    </div>
+                    <input type="range" id="propFontSize" min="10" max="80" value="24" step="2" />
+                </div>
+
+                <button id="editTextBtn" class="sheet-action">✏️ ویرایش متن</button>
+
+                <div class="prop-row" id="colorRow">
+                    <div class="prop-label"><span>رنگ</span></div>
+                    <input type="color" id="propColor" value="#2c3e50" />
+                </div>
+
+                <button id="deleteBtn" class="sheet-action danger">🗑️ حذف</button>
+            </div>
+        </div>
+
+        <section class="settings-bar">
+            <select id="styleSelect">
+                <option value="modern">مدرن</option>
+                <option value="blueprint">آبی</option>
+                <option value="minimal">مینیمال</option>
+            </select>
+            <select id="compassDirection">
+                <option value="north">N شمال</option>
+                <option value="south">S جنوب</option>
+                <option value="east">E شرق</option>
+                <option value="west">W غرب</option>
+            </select>
+            <button id="reRender" class="primary">🎨 رندر</button>
+        </section>
     </main>
+
+    <section class="rendered-overlay" id="renderedPlan" style="display:none;"></section>
 
     <script src="/static/script.js"></script>
 </body>

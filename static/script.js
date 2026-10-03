@@ -4,22 +4,25 @@
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 const wrapper = document.getElementById("canvasWrapper");
-const toolbar = document.getElementById("toolbar");
-const properties = document.getElementById("properties");
 const textInput = document.getElementById("textInput");
 const toolHint = document.getElementById("toolHint");
 const zoomIndicator = document.getElementById("zoomIndicator");
 const selectionInfo = document.getElementById("selectionInfo");
 const deleteBtn = document.getElementById("deleteBtn");
+const editTextBtn = document.getElementById("editTextBtn");
 const undoBtn = document.getElementById("undoBtn");
 const redoBtn = document.getElementById("redoBtn");
+const propSheet = document.getElementById("propSheet");
+const closePropSheet = document.getElementById("closePropSheet");
 
-const propColor = document.getElementById("propColor");
 const propWidth = document.getElementById("propWidth");
-const propFill = document.getElementById("propFill");
 const propFontSize = document.getElementById("propFontSize");
+const propColor = document.getElementById("propColor");
+const widthValue = document.getElementById("widthValue");
+const fontValue = document.getElementById("fontValue");
+const widthRow = document.getElementById("widthRow");
 const fontRow = document.getElementById("fontRow");
-const fillRow = document.getElementById("fillRow");
+const colorRow = document.getElementById("colorRow");
 
 // ═══════════════════════════════════════════════
 // State
@@ -29,9 +32,6 @@ let selectedId = null;
 let currentTool = "select";
 let history = [];
 let redoStack = [];
-let isDrawing = false;
-let startPoint = null;
-let currentPoint = null;
 let draggingObject = null;
 let dragOffset = { x: 0, y: 0 };
 let isPanning = false;
@@ -39,7 +39,6 @@ let panStart = { x: 0, y: 0, ox: 0, oy: 0 };
 
 let view = { scale: 1, offsetX: 0, offsetY: 0 };
 
-// ⭐ ابعاد اصلی عکس (ثابت)
 let planImageWidth = 1000;
 let planImageHeight = 700;
 
@@ -47,30 +46,27 @@ let detectedStairs = [];
 
 let mapSettings = {
 	style: "modern",
-	// ⭐ مختصات قطب‌نما توی گوشه‌ی پایین-راست (خودکار محاسبه می‌شه)
 	compass: { x: 0, y: 0, size: 40, direction: "north" },
 	title: "",
 };
 
-// ⭐ به‌روزرسانی مختصات قطب‌نما بر اساس ابعاد نقشه (گوشه‌ی پایین-راست)
 function updateCompassPosition() {
 	const margin = 80;
 	mapSettings.compass.x = planImageWidth - margin;
 	mapSettings.compass.y = planImageHeight - margin;
 }
 
-// محاسبه‌ی اولیه
 updateCompassPosition();
 
 const DEFAULT_STYLE = {
-	wall: { color: "#2c3e50", width: 4 },
-	door: { color: "#8B4513", width: 3 },
+	wall: { color: "#2c3e50", width: 6 },
+	door: { color: "#8B4513", width: 4 },
 	window: { color: "#3498DB", width: 3 },
-	text: { color: "#2c3e50", fontSize: 20, bg: "#ffffff" },
-	arrow: { color: "#e74c3c", width: 3 },
-	rect: { color: "#3498db", width: 2, fill: "transparent" },
-	circle: { color: "#9b59b6", width: 2, fill: "transparent" },
-	room: { color: "#3498db", width: 2 },
+	text: { color: "#2c3e50", fontSize: 24, bg: "#ffffff" },
+	arrow: { color: "#e74c3c", width: 4 },
+	rect: { color: "#3498db", width: 3, fill: "transparent" },
+	circle: { color: "#9b59b6", width: 3, fill: "transparent" },
+	room: { color: "#3498db", width: 3 },
 };
 
 function uid() {
@@ -78,7 +74,17 @@ function uid() {
 }
 
 // ═══════════════════════════════════════════════
-// History (Undo/Redo)
+// ⭐ حالت ویرایش متن
+// ═══════════════════════════════════════════════
+let textEditing = {
+	active: false,
+	id: null,
+	worldPos: null,
+	value: "",
+};
+
+// ═══════════════════════════════════════════════
+// History
 // ═══════════════════════════════════════════════
 function pushHistory() {
 	history.push(JSON.stringify(objects));
@@ -99,6 +105,7 @@ function undo() {
 	objects = JSON.parse(history[history.length - 1]);
 	selectedId = null;
 	updateSelectionUI();
+	closeSheet();
 	redraw();
 	updateUndoRedo();
 }
@@ -110,6 +117,7 @@ function redo() {
 	objects = JSON.parse(state);
 	selectedId = null;
 	updateSelectionUI();
+	closeSheet();
 	redraw();
 	updateUndoRedo();
 }
@@ -118,28 +126,21 @@ undoBtn.onclick = undo;
 redoBtn.onclick = redo;
 
 history.push(JSON.stringify(objects));
+updateUndoRedo();
 
 // ═══════════════════════════════════════════════
 // ابزارها
 // ═══════════════════════════════════════════════
 const toolHints = {
-	select: "👆 روی اشیاء بزن تا انتخاب بشن | بکش تا جابجا کنی",
-	wall: "🧱 بکش تا دیوار رسم کنی",
-	room: "📐 بکش تا اتاق رسم کنی",
-	door: "🚪 بکش تا در رسم کنی",
-	window: "🪟 بکش تا پنجره رسم کنی",
-	text: "🏷️ روی نقشه بزن، متن رو بنویس، Enter بزن",
-	arrow: "➡️ بکش تا فلش رسم کنی",
-	rect: "⬛ بکش تا مستطیل رسم کنی",
-	circle: "⭕ بکش تا دایره رسم کنی",
-	eraser: "🧽 روی هر شیء بزن تا پاک بشه",
+	select: "👆 روی متن بزن | بکش تا جابجا کنی | دوبار بزن تا ویرایش",
+	text: "🏷️ روی نقشه بزن تا متن بنویسی",
+	eraser: "🗑️ روی شیء بزن تا پاک بشه",
 };
 
 document.querySelectorAll(".tool-btn").forEach((btn) => {
 	btn.addEventListener("click", () => {
 		const tool = btn.dataset.tool;
-
-		if (textInput.style.display !== "none") commitTextInput();
+		if (textEditing.active) commitText();
 
 		document.querySelectorAll(".tool-btn").forEach((b) => b.classList.remove("active"));
 		btn.classList.add("active");
@@ -147,9 +148,29 @@ document.querySelectorAll(".tool-btn").forEach((btn) => {
 		toolHint.textContent = toolHints[tool] || "";
 		selectedId = null;
 		updateSelectionUI();
+		closeSheet();
 		redraw();
 	});
 });
+
+function setTool(tool) {
+	currentTool = tool;
+	document.querySelectorAll(".tool-btn").forEach((b) => {
+		b.classList.toggle("active", b.dataset.tool === tool);
+	});
+	toolHint.textContent = toolHints[tool] || "";
+}
+
+// ═══════════════════════════════════════════════
+// Sheet
+// ═══════════════════════════════════════════════
+function openSheet() {
+	propSheet.classList.add("open");
+}
+function closeSheet() {
+	propSheet.classList.remove("open");
+}
+closePropSheet.onclick = closeSheet;
 
 // ═══════════════════════════════════════════════
 // مختصات
@@ -195,8 +216,11 @@ function fitToScreen() {
 			addPoint(o.x - o.r, o.y - o.r);
 			addPoint(o.x + o.r, o.y + o.r);
 		} else if (o.type === "text") {
-			addPoint(o.x, o.y);
-			addPoint(o.x + 100, o.y + 30);
+			const b = getObjectBounds(o);
+			if (b) {
+				addPoint(b.x, b.y);
+				addPoint(b.x + b.w, b.y + b.h);
+			}
 		}
 	});
 
@@ -220,11 +244,6 @@ function fitToScreen() {
 	view.scale = newScale;
 	view.offsetX = (cw - mapW * newScale) / 2 - minX * newScale;
 	view.offsetY = (ch - mapH * newScale) / 2 - minY * newScale;
-	redraw();
-}
-
-function resetView() {
-	view = { scale: 1, offsetX: 0, offsetY: 0 };
 	redraw();
 }
 
@@ -255,7 +274,7 @@ function resizeCanvas() {
 window.addEventListener("resize", resizeCanvas);
 
 // ═══════════════════════════════════════════════
-// رسم اصلی
+// رسم
 // ═══════════════════════════════════════════════
 function redraw() {
 	const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -276,10 +295,6 @@ function redraw() {
 	drawStairsAI(detectedStairs);
 	objects.forEach((o) => drawObject(o));
 
-	if (isDrawing && startPoint && currentPoint) {
-		drawPreview();
-	}
-
 	if (selectedId) {
 		const sel = objects.find((o) => o.id === selectedId);
 		if (sel) drawSelectionIndicator(sel);
@@ -287,7 +302,6 @@ function redraw() {
 
 	ctx.restore();
 
-	// ⭐ قطب‌نما روی لایه‌ی ثابت (بعد از ctx.restore)
 	drawCompassOnCanvas();
 
 	zoomIndicator.textContent = `${Math.round(view.scale * 100)}%`;
@@ -296,31 +310,22 @@ function redraw() {
 function drawCompassOnCanvas() {
 	const c = mapSettings.compass;
 	const size = c.size;
-
-	// ⭐ تبدیل مختصات دنیا (نقشه) به مختصات صفحه
 	const screenPos = worldToScreen(c.x, c.y);
 	const cx = screenPos.x;
 	const cy = screenPos.y;
 
-	// اگه بیرون از canvas بود، رسم نکن
 	if (cx < -100 || cy < -100 || cx > wrapper.clientWidth + 100 || cy > wrapper.clientHeight + 100) {
 		return;
 	}
 
 	ctx.save();
-
 	ctx.strokeStyle = "#2c3e50";
 	ctx.lineWidth = 2;
 	ctx.beginPath();
 	ctx.arc(cx, cy, size, 0, Math.PI * 2);
 	ctx.stroke();
 
-	const dirs = {
-		north: -Math.PI / 2,
-		south: Math.PI / 2,
-		east: 0,
-		west: Math.PI,
-	};
+	const dirs = { north: -Math.PI / 2, south: Math.PI / 2, east: 0, west: Math.PI };
 	const baseAngle = dirs[c.direction] ?? -Math.PI / 2;
 	const tipX = cx + Math.cos(baseAngle) * (size - 8);
 	const tipY = cy + Math.sin(baseAngle) * (size - 8);
@@ -338,36 +343,6 @@ function drawCompassOnCanvas() {
 	ctx.textAlign = "center";
 	ctx.textBaseline = "middle";
 	ctx.fillText("N", cx, cy - size - 12);
-
-	ctx.restore();
-}
-
-function drawPreview() {
-	const s = startPoint;
-	const c = currentPoint;
-
-	ctx.save();
-	ctx.setLineDash([6 / view.scale, 4 / view.scale]);
-	ctx.strokeStyle = "#3498db";
-	ctx.lineWidth = 2 / view.scale;
-
-	if (currentTool === "wall" || currentTool === "door" || currentTool === "window" || currentTool === "arrow") {
-		ctx.beginPath();
-		ctx.moveTo(s.x, s.y);
-		ctx.lineTo(c.x, c.y);
-		ctx.stroke();
-	} else if (currentTool === "rect" || currentTool === "room") {
-		const x = Math.min(s.x, c.x);
-		const y = Math.min(s.y, c.y);
-		const w = Math.abs(c.x - s.x);
-		const h = Math.abs(c.y - s.y);
-		ctx.strokeRect(x, y, w, h);
-	} else if (currentTool === "circle") {
-		const r = Math.hypot(c.x - s.x, c.y - s.y);
-		ctx.beginPath();
-		ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
-		ctx.stroke();
-	}
 	ctx.restore();
 }
 
@@ -388,7 +363,7 @@ function drawObject(o) {
 		drawWindow(o);
 	} else if (o.type === "room") {
 		ctx.strokeStyle = o.color || DEFAULT_STYLE.room.color;
-		ctx.lineWidth = 2 / view.scale;
+		ctx.lineWidth = (o.width || DEFAULT_STYLE.room.width) / view.scale;
 		ctx.setLineDash([6 / view.scale, 4 / view.scale]);
 		ctx.strokeRect(o.x, o.y, o.w, o.h);
 		ctx.setLineDash([]);
@@ -415,6 +390,10 @@ function drawObject(o) {
 	} else if (o.type === "arrow") {
 		drawArrow(o);
 	} else if (o.type === "text") {
+		if (textEditing.active && textEditing.id === o.id) {
+			ctx.restore();
+			return;
+		}
 		drawText(o);
 	}
 
@@ -426,14 +405,14 @@ function drawDoor(o) {
 	if (len < 3) return;
 
 	ctx.strokeStyle = "#fafbfc";
-	ctx.lineWidth = 8 / view.scale;
+	ctx.lineWidth = 10 / view.scale;
 	ctx.beginPath();
 	ctx.moveTo(o.x1, o.y1);
 	ctx.lineTo(o.x2, o.y2);
 	ctx.stroke();
 
 	ctx.strokeStyle = o.color || DEFAULT_STYLE.door.color;
-	ctx.lineWidth = 3 / view.scale;
+	ctx.lineWidth = (o.width || DEFAULT_STYLE.door.width) / view.scale;
 
 	const angle = Math.atan2(o.y2 - o.y1, o.x2 - o.x1);
 	const doorAngle = angle - Math.PI / 2;
@@ -455,7 +434,7 @@ function drawWindow(o) {
 	if (len < 3) return;
 
 	ctx.strokeStyle = "#fafbfc";
-	ctx.lineWidth = 8 / view.scale;
+	ctx.lineWidth = 10 / view.scale;
 	ctx.beginPath();
 	ctx.moveTo(o.x1, o.y1);
 	ctx.lineTo(o.x2, o.y2);
@@ -463,10 +442,10 @@ function drawWindow(o) {
 
 	const angle = Math.atan2(o.y2 - o.y1, o.x2 - o.x1);
 	const perp = angle + Math.PI / 2;
-	const offset = 3 / view.scale;
+	const offset = 4 / view.scale;
 
 	ctx.strokeStyle = o.color || DEFAULT_STYLE.window.color;
-	ctx.lineWidth = 2 / view.scale;
+	ctx.lineWidth = (o.width || DEFAULT_STYLE.window.width) / view.scale;
 	for (const sign of [-1, 1]) {
 		const ox = Math.cos(perp) * offset * sign;
 		const oy = Math.sin(perp) * offset * sign;
@@ -480,7 +459,7 @@ function drawWindow(o) {
 function drawArrow(o) {
 	const angle = Math.atan2(o.y2 - o.y1, o.x2 - o.x1);
 	const len = Math.hypot(o.x2 - o.x1, o.y2 - o.y1);
-	const headLen = Math.min(20, len * 0.3) / view.scale;
+	const headLen = Math.min(24, len * 0.35) / view.scale;
 
 	ctx.strokeStyle = o.color || DEFAULT_STYLE.arrow.color;
 	ctx.fillStyle = o.color || DEFAULT_STYLE.arrow.color;
@@ -495,7 +474,7 @@ function drawArrow(o) {
 	const ax = o.x2 - Math.cos(angle) * headLen;
 	const ay = o.y2 - Math.sin(angle) * headLen;
 	const perp = angle + Math.PI / 2;
-	const w = headLen * 0.5;
+	const w = headLen * 0.55;
 
 	ctx.beginPath();
 	ctx.moveTo(o.x2, o.y2);
@@ -546,7 +525,7 @@ function drawStairsAI(stairs) {
 	stairs.forEach((stair) => {
 		ctx.save();
 		ctx.strokeStyle = "#e67e22";
-		ctx.lineWidth = 1.5 / view.scale;
+		ctx.lineWidth = 2 / view.scale;
 
 		if (stair.lines) {
 			stair.lines.forEach((line) => {
@@ -586,7 +565,7 @@ function drawSelectionIndicator(o) {
 
 	const b = getObjectBounds(o);
 	if (b) {
-		ctx.strokeRect(b.x - 4 / view.scale, b.y - 4 / view.scale, b.w + 8 / view.scale, b.h + 8 / view.scale);
+		ctx.strokeRect(b.x - 6 / view.scale, b.y - 6 / view.scale, b.w + 12 / view.scale, b.h + 12 / view.scale);
 	}
 	ctx.restore();
 }
@@ -604,7 +583,7 @@ function getObjectBounds(o) {
 	} else if (o.type === "circle") {
 		return { x: o.x - o.r, y: o.y - o.r, w: o.r * 2, h: o.r * 2 };
 	} else if (o.type === "text") {
-		const fontSize = o.fontSize || 20;
+		const fontSize = o.fontSize || DEFAULT_STYLE.text.fontSize;
 		ctx.save();
 		ctx.font = `bold ${fontSize}px Tahoma, sans-serif`;
 		const tw = ctx.measureText(o.text || "").width;
@@ -626,7 +605,7 @@ function hitTest(pt) {
 }
 
 function isPointInObject(pt, o) {
-	const tol = 12 / view.scale;
+	const tol = 16 / view.scale;
 
 	if (o.type === "wall" || o.type === "door" || o.type === "window" || o.type === "arrow") {
 		return pointToSegmentDist(pt.x, pt.y, o.x1, o.y1, o.x2, o.y2) < tol;
@@ -656,17 +635,154 @@ function pointToSegmentDist(px, py, x1, y1, x2, y2) {
 }
 
 // ═══════════════════════════════════════════════
+// ⭐ شروع ویرایش متن — input واقعی روی صفحه
+// ═══════════════════════════════════════════════
+function startTextEdit(worldPos, existingText = null) {
+	textEditing.active = true;
+	textEditing.worldPos = { x: worldPos.x, y: worldPos.y };
+	textEditing.value = existingText ? existingText.text : "";
+	textEditing.id = existingText ? existingText.id : null;
+
+	// ⭐ موقعیت input رو دقیقاً روی نقطه‌ی کلیک بذار
+	const screenPos = worldToScreen(worldPos.x, worldPos.y);
+	const rect = wrapper.getBoundingClientRect();
+
+	// نمایش input به شکل واقعی
+	textInput.style.display = "block";
+	textInput.style.opacity = "1";
+	textInput.style.pointerEvents = "auto";
+	textInput.style.position = "absolute";
+	textInput.style.width = "180px";
+	textInput.style.height = "40px";
+	textInput.style.fontSize = "16px";
+	textInput.style.padding = "6px 10px";
+
+	// موقعیت: کمی بالاتر از نقطه‌ی کلیک
+	const left = Math.max(10, Math.min(screenPos.x - 180, wrapper.clientWidth - 190));
+	const top = Math.max(10, screenPos.y - 20);
+
+	textInput.style.left = left + "px";
+	textInput.style.top = top + "px";
+
+	textInput.value = textEditing.value;
+
+	// ⭐ focus فوری (بدون تاخیر) — برای موبایل حیاتی
+	textInput.focus();
+	textInput.setSelectionRange(textInput.value.length, textInput.value.length);
+
+	// یه بار دیگه با تاخیر هم focus کن (برای iOS)
+	setTimeout(() => {
+		textInput.focus();
+	}, 100);
+
+	redraw();
+}
+
+function commitText() {
+	if (!textEditing.active) return;
+
+	const val = textInput.value.trim();
+
+	if (!val) {
+		if (textEditing.id) {
+			pushHistory();
+			objects = objects.filter((o) => o.id !== textEditing.id);
+		}
+		resetTextEdit();
+		return;
+	}
+
+	if (textEditing.id) {
+		const o = objects.find((x) => x.id === textEditing.id);
+		if (o && o.text !== val) {
+			pushHistory();
+			o.text = val;
+		}
+	} else {
+		pushHistory();
+		const id = uid();
+		objects.push({
+			id,
+			type: "text",
+			x: textEditing.worldPos.x,
+			y: textEditing.worldPos.y,
+			text: val,
+			color: DEFAULT_STYLE.text.color,
+			fontSize: DEFAULT_STYLE.text.fontSize,
+			bg: DEFAULT_STYLE.text.bg,
+		});
+	}
+
+	resetTextEdit();
+	setTool("select");
+}
+
+function resetTextEdit() {
+	textEditing.active = false;
+	textEditing.id = null;
+	textEditing.worldPos = null;
+	textEditing.value = "";
+	textInput.value = "";
+	textInput.style.display = "none";
+	textInput.blur();
+	redraw();
+}
+
+function cancelText() {
+	resetTextEdit();
+}
+
+// ═══════════════════════════════════════════════
+// رویدادهای input
+// ═══════════════════════════════════════════════
+textInput.addEventListener("input", () => {
+	if (!textEditing.active) return;
+	textEditing.value = textInput.value;
+	// نیازی به redraw نیست چون input واقعی دیده می‌شه
+});
+
+textInput.addEventListener("keydown", (e) => {
+	// ⭐ Enter = ثبت
+	if (e.key === "Enter" || e.key === "NumpadEnter") {
+		e.preventDefault();
+		e.stopPropagation();
+		commitText();
+	} else if (e.key === "Escape") {
+		e.preventDefault();
+		cancelText();
+	}
+});
+
+// ⭐ blur با تاخیر بررسی می‌شه
+let blurTimeout = null;
+textInput.addEventListener("blur", () => {
+	if (blurTimeout) clearTimeout(blurTimeout);
+	blurTimeout = setTimeout(() => {
+		if (textEditing.active && document.activeElement !== textInput) {
+			commitText();
+		}
+	}, 250);
+});
+
+// ⭐ روی موبایل، دکمه‌ی Enter شاید نیاد، پس یه دکمه‌ی تایید هم بذاریم روی input
+// این کار رو با یه لایه‌ی اضافه انجام نمی‌دیم، فقط از طریق blur
+
+// ═══════════════════════════════════════════════
 // Pointer events
 // ═══════════════════════════════════════════════
 let pointers = new Map();
 let pinchStart = null;
+let lastTapTime = 0;
+let lastTapPos = null;
 
 canvas.addEventListener("pointerdown", (e) => {
+	// اگه روی input هستیم، کاری نکن
+	if (e.target === textInput) return;
+
 	canvas.setPointerCapture(e.pointerId);
 	pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
 	if (pointers.size === 2) {
-		isDrawing = false;
 		const pts = Array.from(pointers.values());
 		const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
 		const mid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
@@ -684,7 +800,12 @@ canvas.addEventListener("pointerdown", (e) => {
 	if (e.button === 2 || e.shiftKey) {
 		isPanning = true;
 		panStart = { x: e.clientX, y: e.clientY, ox: view.offsetX, oy: view.offsetY };
-		canvas.style.cursor = "grabbing";
+		return;
+	}
+
+	// اگه در حال ویرایش متنیم و بیرون کلیک شد → commit
+	if (textEditing.active) {
+		commitText();
 		return;
 	}
 
@@ -693,14 +814,27 @@ canvas.addEventListener("pointerdown", (e) => {
 	if (currentTool === "select") {
 		const hit = hitTest(pt);
 		if (hit) {
+			const now = Date.now();
+			// double-tap روی متن
+			if (hit.type === "text" && now - lastTapTime < 350 && lastTapPos && Math.hypot(pt.x - lastTapPos.x, pt.y - lastTapPos.y) < 30 / view.scale) {
+				startTextEdit({ x: hit.x, y: hit.y }, hit);
+				lastTapTime = 0;
+				lastTapPos = null;
+				return;
+			}
+
+			lastTapTime = now;
+			lastTapPos = pt;
+
 			selectedId = hit.id;
 			updateSelectionUI();
+			openSheet();
 			draggingObject = hit;
 			dragOffset = { x: pt.x, y: pt.y };
-			canvas.style.cursor = "move";
 		} else {
 			selectedId = null;
 			updateSelectionUI();
+			closeSheet();
 		}
 		redraw();
 		return;
@@ -711,22 +845,26 @@ canvas.addEventListener("pointerdown", (e) => {
 		if (hit) {
 			pushHistory();
 			objects = objects.filter((o) => o.id !== hit.id);
+			selectedId = null;
+			updateSelectionUI();
+			closeSheet();
 			redraw();
 		}
 		return;
 	}
 
 	if (currentTool === "text") {
-		showTextInput(e.clientX, e.clientY);
+		// ⭐ شروع ویرایش متن جدید
+		startTextEdit(pt, null);
 		return;
 	}
 
-	isDrawing = true;
-	startPoint = pt;
-	currentPoint = pt;
+	return;
 });
 
 canvas.addEventListener("pointermove", (e) => {
+	if (e.target === textInput) return;
+
 	if (pointers.has(e.pointerId)) {
 		pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 	}
@@ -766,49 +904,28 @@ canvas.addEventListener("pointermove", (e) => {
 		redraw();
 		return;
 	}
-
-	if (isDrawing) {
-		currentPoint = screenToWorld(e.clientX, e.clientY);
-		redraw();
-	}
 });
 
 canvas.addEventListener("pointerup", (e) => {
+	if (e.target === textInput) return;
+
 	pointers.delete(e.pointerId);
 	if (pointers.size < 2) pinchStart = null;
 
 	if (isPanning) {
 		isPanning = false;
-		canvas.style.cursor = currentTool === "select" ? "default" : "crosshair";
 		return;
 	}
 
 	if (draggingObject) {
 		pushHistory();
 		draggingObject = null;
-		canvas.style.cursor = "default";
 		return;
 	}
-
-	if (!isDrawing) return;
-	isDrawing = false;
-
-	if (startPoint && currentPoint) {
-		const dist = Math.hypot(currentPoint.x - startPoint.x, currentPoint.y - startPoint.y);
-		if (dist > 5) {
-			pushHistory();
-			createObject(currentTool, startPoint, currentPoint);
-		}
-	}
-
-	startPoint = null;
-	currentPoint = null;
-	redraw();
 });
 
 canvas.addEventListener("pointercancel", (e) => {
 	pointers.delete(e.pointerId);
-	isDrawing = false;
 	isPanning = false;
 	draggingObject = null;
 	pinchStart = null;
@@ -816,146 +933,20 @@ canvas.addEventListener("pointercancel", (e) => {
 
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
-// ═══════════════════════════════════════════════
-// ساخت شیء
-// ═══════════════════════════════════════════════
-function createObject(tool, s, c) {
-	const id = uid();
-	let obj = null;
-
-	if (tool === "wall") {
-		obj = { id, type: "wall", x1: s.x, y1: s.y, x2: c.x, y2: c.y, ...DEFAULT_STYLE.wall };
-	} else if (tool === "door") {
-		obj = { id, type: "door", x1: s.x, y1: s.y, x2: c.x, y2: c.y, ...DEFAULT_STYLE.door };
-	} else if (tool === "window") {
-		obj = { id, type: "window", x1: s.x, y1: s.y, x2: c.x, y2: c.y, ...DEFAULT_STYLE.window };
-	} else if (tool === "arrow") {
-		obj = { id, type: "arrow", x1: s.x, y1: s.y, x2: c.x, y2: c.y, ...DEFAULT_STYLE.arrow };
-	} else if (tool === "rect") {
-		obj = {
-			id,
-			type: "rect",
-			x: Math.min(s.x, c.x),
-			y: Math.min(s.y, c.y),
-			w: Math.abs(c.x - s.x),
-			h: Math.abs(c.y - s.y),
-			...DEFAULT_STYLE.rect,
-		};
-	} else if (tool === "room") {
-		obj = {
-			id,
-			type: "room",
-			x: Math.min(s.x, c.x),
-			y: Math.min(s.y, c.y),
-			w: Math.abs(c.x - s.x),
-			h: Math.abs(c.y - s.y),
-			color: DEFAULT_STYLE.room.color,
-		};
-	} else if (tool === "circle") {
-		obj = {
-			id,
-			type: "circle",
-			x: s.x,
-			y: s.y,
-			r: Math.hypot(c.x - s.x, c.y - s.y),
-			...DEFAULT_STYLE.circle,
-		};
-	}
-
-	if (obj) {
-		objects.push(obj);
-		selectedId = obj.id;
-		updateSelectionUI();
-	}
-}
-
-function moveObject(o, dx, dy) {
-	if (o.type === "wall" || o.type === "door" || o.type === "window" || o.type === "arrow") {
-		o.x1 += dx;
-		o.y1 += dy;
-		o.x2 += dx;
-		o.y2 += dy;
-	} else if (o.type === "rect" || o.type === "room" || o.type === "text") {
-		o.x += dx;
-		o.y += dy;
-	} else if (o.type === "circle") {
-		o.x += dx;
-		o.y += dy;
-	}
-}
+canvas.addEventListener(
+	"touchstart",
+	(e) => {
+		if (e.touches.length > 1) e.preventDefault();
+	},
+	{ passive: false },
+);
 
 // ═══════════════════════════════════════════════
-// Text input
-// ═══════════════════════════════════════════════
-let pendingTextPos = null;
-
-function showTextInput(clientX, clientY) {
-	const rect = wrapper.getBoundingClientRect();
-	const localX = clientX - rect.left;
-	const localY = clientY - rect.top;
-
-	textInput.style.display = "block";
-	textInput.style.left = Math.max(10, localX - 150) + "px";
-	textInput.style.top = localY - 20 + "px";
-	textInput.value = "";
-	textInput.focus();
-
-	pendingTextPos = screenToWorld(clientX, clientY);
-}
-
-function commitTextInput() {
-	const val = textInput.value.trim();
-	textInput.style.display = "none";
-	textInput.value = "";
-
-	if (!val || !pendingTextPos) {
-		pendingTextPos = null;
-		return;
-	}
-
-	pushHistory();
-	const id = uid();
-	objects.push({
-		id,
-		type: "text",
-		x: pendingTextPos.x,
-		y: pendingTextPos.y,
-		text: val,
-		color: DEFAULT_STYLE.text.color,
-		fontSize: DEFAULT_STYLE.text.fontSize,
-		bg: DEFAULT_STYLE.text.bg,
-	});
-	pendingTextPos = null;
-	redraw();
-}
-
-textInput.addEventListener("keydown", (e) => {
-	if (e.key === "Enter") {
-		e.preventDefault();
-		commitTextInput();
-	} else if (e.key === "Escape") {
-		textInput.style.display = "none";
-		textInput.value = "";
-		pendingTextPos = null;
-	}
-});
-
-textInput.addEventListener("blur", () => {
-	if (textInput.style.display !== "none" && textInput.value.trim()) {
-		commitTextInput();
-	} else {
-		textInput.style.display = "none";
-		pendingTextPos = null;
-	}
-});
-
-// ═══════════════════════════════════════════════
-// Properties
+// Selection UI
 // ═══════════════════════════════════════════════
 function updateSelectionUI() {
 	if (!selectedId) {
 		selectionInfo.textContent = "هیچ‌چیز انتخاب نشده";
-		deleteBtn.style.display = "none";
 		return;
 	}
 
@@ -963,30 +954,27 @@ function updateSelectionUI() {
 	if (!o) return;
 
 	selectionInfo.textContent = `انتخاب: ${objectTypeName(o.type)}`;
-	deleteBtn.style.display = "block";
-
-	if (o.color) propColor.value = o.color;
 
 	if (o.width !== undefined) {
+		widthRow.style.display = "flex";
 		propWidth.value = o.width;
-		propWidth.parentElement.style.display = "flex";
+		widthValue.textContent = o.width;
 	} else {
-		propWidth.parentElement.style.display = "none";
+		widthRow.style.display = "none";
 	}
 
 	if (o.type === "text") {
 		fontRow.style.display = "flex";
-		propFontSize.value = o.fontSize || 20;
+		editTextBtn.style.display = "flex";
+		propFontSize.value = o.fontSize || 24;
+		fontValue.textContent = o.fontSize || 24;
 	} else {
 		fontRow.style.display = "none";
+		editTextBtn.style.display = "none";
 	}
 
-	if (o.type === "rect" || o.type === "circle") {
-		fillRow.style.display = "flex";
-		propFill.value = o.fill && o.fill !== "transparent" ? o.fill : "#ffffff";
-	} else {
-		fillRow.style.display = "none";
-	}
+	colorRow.style.display = "flex";
+	if (o.color) propColor.value = o.color;
 }
 
 function objectTypeName(t) {
@@ -1010,8 +998,48 @@ deleteBtn.onclick = () => {
 	objects = objects.filter((o) => o.id !== selectedId);
 	selectedId = null;
 	updateSelectionUI();
+	closeSheet();
 	redraw();
 };
+
+editTextBtn.onclick = () => {
+	if (!selectedId) return;
+	const o = objects.find((x) => x.id === selectedId);
+	if (!o || o.type !== "text") return;
+	closeSheet();
+	startTextEdit({ x: o.x, y: o.y }, o);
+};
+
+// ═══════════════════════════════════════════════
+// Properties
+// ═══════════════════════════════════════════════
+propWidth.addEventListener("input", (e) => {
+	if (!selectedId) return;
+	const o = objects.find((x) => x.id === selectedId);
+	if (o && o.width !== undefined) {
+		o.width = parseInt(e.target.value);
+		widthValue.textContent = o.width;
+		redraw();
+	}
+});
+
+propWidth.addEventListener("change", () => {
+	if (selectedId) pushHistory();
+});
+
+propFontSize.addEventListener("input", (e) => {
+	if (!selectedId) return;
+	const o = objects.find((x) => x.id === selectedId);
+	if (o && o.type === "text") {
+		o.fontSize = parseInt(e.target.value);
+		fontValue.textContent = o.fontSize;
+		redraw();
+	}
+});
+
+propFontSize.addEventListener("change", () => {
+	if (selectedId) pushHistory();
+});
 
 propColor.addEventListener("input", (e) => {
 	if (!selectedId) return;
@@ -1026,73 +1054,16 @@ propColor.addEventListener("change", () => {
 	if (selectedId) pushHistory();
 });
 
-propWidth.addEventListener("input", (e) => {
-	if (!selectedId) return;
-	const o = objects.find((x) => x.id === selectedId);
-	if (o && o.width !== undefined) {
-		o.width = parseInt(e.target.value);
-		redraw();
-	}
-});
-
-propWidth.addEventListener("change", () => {
-	if (selectedId) pushHistory();
-});
-
-propFill.addEventListener("input", (e) => {
-	if (!selectedId) return;
-	const o = objects.find((x) => x.id === selectedId);
-	if (o) {
-		o.fill = e.target.value;
-		redraw();
-	}
-});
-
-propFill.addEventListener("change", () => {
-	if (selectedId) pushHistory();
-});
-
-propFontSize.addEventListener("input", (e) => {
-	if (!selectedId) return;
-	const o = objects.find((x) => x.id === selectedId);
-	if (o && o.type === "text") {
-		o.fontSize = parseInt(e.target.value);
-		redraw();
-	}
-});
-
-propFontSize.addEventListener("change", () => {
-	if (selectedId) pushHistory();
-});
-
-canvas.addEventListener("dblclick", (e) => {
-	const pt = screenToWorld(e.clientX, e.clientY);
-	const hit = hitTest(pt);
-	if (hit && hit.type === "text") {
-		const newText = prompt("متن جدید:", hit.text);
-		if (newText !== null && newText.trim()) {
-			pushHistory();
-			hit.text = newText.trim();
-			redraw();
-		}
-	}
-});
-
 // ═══════════════════════════════════════════════
-// Zoom buttons
+// Zoom
 // ═══════════════════════════════════════════════
 document.getElementById("zoomIn").onclick = () => {
-	const cx = wrapper.clientWidth / 2;
-	const cy = wrapper.clientHeight / 2;
-	zoomAt(cx, cy, 1.2);
+	zoomAt(wrapper.clientWidth / 2, wrapper.clientHeight / 2, 1.2);
 };
 document.getElementById("zoomOut").onclick = () => {
-	const cx = wrapper.clientWidth / 2;
-	const cy = wrapper.clientHeight / 2;
-	zoomAt(cx, cy, 1 / 1.2);
+	zoomAt(wrapper.clientWidth / 2, wrapper.clientHeight / 2, 1 / 1.2);
 };
 document.getElementById("zoomFit").onclick = () => fitToScreen();
-document.getElementById("zoomReset").onclick = () => resetView();
 
 // ═══════════════════════════════════════════════
 // Keyboard
@@ -1105,10 +1076,6 @@ document.addEventListener("keydown", (e) => {
 			e.preventDefault();
 			deleteBtn.click();
 		}
-	} else if (e.key === "Escape") {
-		selectedId = null;
-		updateSelectionUI();
-		redraw();
 	} else if ((e.ctrlKey || e.metaKey) && e.key === "z") {
 		e.preventDefault();
 		if (e.shiftKey) redo();
@@ -1137,7 +1104,7 @@ fileInput.addEventListener("change", async (e) => {
 		const res = await fetch("/api/upload", { method: "POST", body: fd });
 		const data = await res.json();
 		if (data.success) {
-			uploadStatus.textContent = "✅ آپلود شد";
+			uploadStatus.textContent = "✅ آماده";
 			uploadedFilename = data.filename;
 			detectBtn.disabled = false;
 		} else {
@@ -1151,7 +1118,7 @@ fileInput.addEventListener("change", async (e) => {
 detectBtn.addEventListener("click", async () => {
 	if (!uploadedFilename) return;
 	detectBtn.disabled = true;
-	uploadStatus.textContent = "🤖 در حال تشخیص (دو-مرحله‌ای)...";
+	uploadStatus.textContent = "🤖 تشخیص...";
 
 	try {
 		const res = await fetch("/api/detect-lines", {
@@ -1162,11 +1129,8 @@ detectBtn.addEventListener("click", async () => {
 		const data = await res.json();
 
 		if (data.success) {
-			// ⭐ ذخیره‌ی ابعاد اصلی
 			planImageWidth = data.imageWidth || 1000;
 			planImageHeight = data.imageHeight || 700;
-
-			// ⭐ قطب‌نما رو ببر گوشه‌ی پایین-راست
 			updateCompassPosition();
 
 			detectedStairs = data.stairs || [];
@@ -1185,7 +1149,7 @@ detectBtn.addEventListener("click", async () => {
 
 			objects.push(...newWalls);
 
-			uploadStatus.textContent = `✅ ${data.lines.length} خط و ${data.stairs?.length || 0} پله`;
+			uploadStatus.textContent = `✅ ${data.lines.length} خط`;
 			fitToScreen();
 		} else {
 			uploadStatus.textContent = "❌ " + (data.detail || "خطا");
@@ -1198,13 +1162,11 @@ detectBtn.addEventListener("click", async () => {
 });
 
 // ═══════════════════════════════════════════════
-// Render نهایی
+// Render
 // ═══════════════════════════════════════════════
 const reRenderBtn = document.getElementById("reRender");
 const styleSelect = document.getElementById("styleSelect");
 const compassDirection = document.getElementById("compassDirection");
-const planTitle = document.getElementById("planTitle");
-const clearBtn = document.getElementById("clearCanvas");
 
 styleSelect.addEventListener("change", (e) => {
 	mapSettings.style = e.target.value;
@@ -1216,26 +1178,14 @@ compassDirection.addEventListener("change", (e) => {
 	redraw();
 });
 
-planTitle.addEventListener("input", (e) => (mapSettings.title = e.target.value));
-
-clearBtn.onclick = () => {
-	if (!confirm("همه‌چیز پاک بشه؟")) return;
-	pushHistory();
-	objects = [];
-	detectedStairs = [];
-	selectedId = null;
-	updateSelectionUI();
-	redraw();
-};
-
 reRenderBtn.addEventListener("click", async () => {
-	if (objects.length === 0) return alert("اول یه چیزی بکش");
+	if (textEditing.active) commitText();
+	if (objects.length === 0) return alert("اول یه چیزی بذار");
 
 	reRenderBtn.disabled = true;
 	reRenderBtn.textContent = "⏳...";
 
 	try {
-		// ⭐ مطمئن شو قطب‌نما توی گوشه‌ست
 		updateCompassPosition();
 
 		const walls = objects
@@ -1258,6 +1208,7 @@ reRenderBtn.addEventListener("click", async () => {
 				x2: o.x2,
 				y2: o.y2,
 				color: o.color,
+				width: o.width,
 			}));
 		const windows = objects
 			.filter((o) => o.type === "window")
@@ -1267,6 +1218,7 @@ reRenderBtn.addEventListener("click", async () => {
 				x2: o.x2,
 				y2: o.y2,
 				color: o.color,
+				width: o.width,
 			}));
 		const rooms = objects
 			.filter((o) => o.type === "room")
@@ -1333,7 +1285,7 @@ reRenderBtn.addEventListener("click", async () => {
 				circles,
 				compass: mapSettings.compass,
 				style: mapSettings.style,
-				title: mapSettings.title,
+				title: "",
 				imageWidth: planImageWidth,
 				imageHeight: planImageHeight,
 			}),
@@ -1360,9 +1312,24 @@ reRenderBtn.addEventListener("click", async () => {
 		alert("خطای شبکه: " + err.message);
 	} finally {
 		reRenderBtn.disabled = false;
-		reRenderBtn.textContent = "🎨 رندر نهایی";
+		reRenderBtn.textContent = "🎨 رندر";
 	}
 });
+
+function moveObject(o, dx, dy) {
+	if (o.type === "wall" || o.type === "door" || o.type === "window" || o.type === "arrow") {
+		o.x1 += dx;
+		o.y1 += dy;
+		o.x2 += dx;
+		o.y2 += dy;
+	} else if (o.type === "rect" || o.type === "room" || o.type === "text") {
+		o.x += dx;
+		o.y += dy;
+	} else if (o.type === "circle") {
+		o.x += dx;
+		o.y += dy;
+	}
+}
 
 // ═══════════════════════════════════════════════
 // شروع
